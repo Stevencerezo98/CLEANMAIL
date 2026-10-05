@@ -1,0 +1,60 @@
+// Prisma Schema para Email Database Cleaner & Categorizer con Puntuación de Confianza Externa
+// Configurable con PostgreSQL, MySQL o SQLite
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql" // Puede cambiarse a "sqlite" o "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum EstadoEmail {
+  VALIDO
+  GENERICO_ROL
+  INVALIDO
+}
+
+enum TipoEmail {
+  Personal
+  Corporativo
+  De_Rol
+}
+
+model Categoria {
+  id             String    @id @default(uuid())
+  nombre         String    @unique
+  fecha_creacion DateTime  @default(now())
+  correos        Correo[]
+
+  @@map("categorias")
+}
+
+model Correo {
+  id                  String      @id @default(uuid())
+  categoria_id        String
+  email               String
+  original_email      String
+  estado              EstadoEmail @default(VALIDO)
+  tipo                TipoEmail   @default(Personal)
+  dominio             String
+  observacion         String
+  mx_valido           Boolean     @default(false)
+  corregido           Boolean     @default(false)
+  score_confianza     Int         @default(0) // Puntuación de 0 a 100
+  verificado_externo  Boolean     @default(false)
+  fuente_verificacion String      @default("Local")
+  fecha_creacion      DateTime    @default(now())
+
+  // Relación con categoría (cascada al eliminar categoría)
+  categoria           Categoria   @relation(fields: [categoria_id], references: [id], onDelete: Cascade)
+
+  // Índice compuesto para garantizar deduplicación por categoría y búsquedas rápidas
+  @@unique([categoria_id, email], name: "categoria_email_unico")
+  @@index([categoria_id])
+  @@index([estado])
+  @@index([score_confianza])
+  @@index([dominio])
+  @@map("correos")
+}

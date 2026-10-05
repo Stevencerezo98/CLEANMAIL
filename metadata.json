@@ -1,0 +1,6 @@
+{
+  "name": "Email Cleaner & Categorizer",
+  "description": "Herramienta full-stack para limpiar, validar por DNS MX/Regex y categorizar bases de datos de correos electrónicos en CSV/XLSX.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
