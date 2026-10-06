@@ -25,6 +25,7 @@ import { Categoria, Correo, EstadoEmail, TipoEmail, UploadProcessSummary } from 
 import { InteractiveAnalyticsHub } from './InteractiveAnalyticsHub.tsx';
 import { EditEmailModal } from './EditEmailModal.tsx';
 import { EditCategoryModal } from './EditCategoryModal.tsx';
+import { ConfirmModal } from './ConfirmModal.tsx';
 
 interface VerifyListViewProps {
   categories: Categoria[];
@@ -107,6 +108,22 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
   // Modals state
   const [editingEmail, setEditingEmail] = useState<Correo | null>(null);
   const [isEditCategoryOpen, setIsEditCategoryOpen] = useState(false);
+
+  // Confirm Modal state (replaces window.confirm so deletion is never blocked in iframes)
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    isDestructive?: boolean;
+    onConfirm: () => void | Promise<void>;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+  });
+  const [isConfirmLoading, setIsConfirmLoading] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -253,21 +270,30 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
     setSelectedIds(next);
   };
 
-  const handleBulkDelete = async () => {
+  const handleBulkDelete = () => {
     if (selectedIds.size === 0) return;
-    if (!window.confirm(`¿Estás seguro de eliminar los ${selectedIds.size} correos seleccionados?`)) {
-      return;
-    }
-
-    setIsBulkDeleting(true);
-    try {
-      await onBulkDelete(Array.from(selectedIds));
-      setSelectedIds(new Set());
-    } catch (err) {
-      setErrorMessage((err as Error).message || 'Error al eliminar correos.');
-    } finally {
-      setIsBulkDeleting(false);
-    }
+    const count = selectedIds.size;
+    setConfirmModal({
+      isOpen: true,
+      title: 'Eliminar correos seleccionados',
+      message: `¿Estás seguro de eliminar los ${count} correos seleccionados de "${activeCategory?.nombre}"? Esta acción no se puede deshacer.`,
+      confirmLabel: `Eliminar ${count} correos`,
+      isDestructive: true,
+      onConfirm: async () => {
+        setIsConfirmLoading(true);
+        setIsBulkDeleting(true);
+        try {
+          await onBulkDelete(Array.from(selectedIds));
+          setSelectedIds(new Set());
+          setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        } catch (err) {
+          setErrorMessage((err as Error).message || 'Error al eliminar correos.');
+        } finally {
+          setIsBulkDeleting(false);
+          setIsConfirmLoading(false);
+        }
+      },
+    });
   };
 
   const handleBulkMove = async () => {
@@ -282,31 +308,49 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
   };
 
   const handleExecutePurge = async () => {
-    if (!window.confirm(`¿Deseas purgar y eliminar definitivamente todos los correos inválidos de "${activeCategory?.nombre}"?`)) {
-      return;
-    }
-    setIsPurging(true);
-    try {
-      await onPurgeInvalid();
-    } catch (err) {
-      setErrorMessage((err as Error).message || 'Error al purgar inválidos.');
-    } finally {
-      setIsPurging(false);
-    }
+    setConfirmModal({
+      isOpen: true,
+      title: 'Purgar correos inválidos',
+      message: `¿Deseas purgar y eliminar definitivamente todos los correos con estado INVÁLIDO de la lista "${activeCategory?.nombre}"?`,
+      confirmLabel: 'Purgar inválidos',
+      isDestructive: true,
+      onConfirm: async () => {
+        setIsConfirmLoading(true);
+        setIsPurging(true);
+        try {
+          await onPurgeInvalid();
+          setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        } catch (err) {
+          setErrorMessage((err as Error).message || 'Error al purgar inválidos.');
+        } finally {
+          setIsPurging(false);
+          setIsConfirmLoading(false);
+        }
+      },
+    });
   };
 
   const handleExecuteMoveRoles = async () => {
-    if (!window.confirm(`¿Deseas aislar todas las cuentas de rol a una nueva lista de revisión?`)) {
-      return;
-    }
-    setIsPurging(true);
-    try {
-      await onMoveRolesToNewList();
-    } catch (err) {
-      setErrorMessage((err as Error).message || 'Error al mover cuentas de rol.');
-    } finally {
-      setIsPurging(false);
-    }
+    setConfirmModal({
+      isOpen: true,
+      title: 'Aislar cuentas de rol',
+      message: '¿Deseas mover todas las cuentas de rol a una nueva lista de revisión aislada?',
+      confirmLabel: 'Aislar cuentas',
+      isDestructive: false,
+      onConfirm: async () => {
+        setIsConfirmLoading(true);
+        setIsPurging(true);
+        try {
+          await onMoveRolesToNewList();
+          setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        } catch (err) {
+          setErrorMessage((err as Error).message || 'Error al mover cuentas de rol.');
+        } finally {
+          setIsPurging(false);
+          setIsConfirmLoading(false);
+        }
+      },
+    });
   };
 
   const getStatusBadge = (estado: EstadoEmail) => {
@@ -833,7 +877,26 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
                             <Edit3 className="w-3.5 h-3.5" />
                           </button>
                           <button
-                            onClick={() => onDeleteEmail(item.id)}
+                            onClick={() => {
+                              setConfirmModal({
+                                isOpen: true,
+                                title: 'Eliminar correo',
+                                message: `¿Deseas eliminar permanentemente "${item.email}" de esta lista?`,
+                                confirmLabel: 'Eliminar correo',
+                                isDestructive: true,
+                                onConfirm: async () => {
+                                  setIsConfirmLoading(true);
+                                  try {
+                                    await onDeleteEmail(item.id);
+                                    setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+                                  } catch (err) {
+                                    setErrorMessage((err as Error).message || 'Error al eliminar correo.');
+                                  } finally {
+                                    setIsConfirmLoading(false);
+                                  }
+                                },
+                              });
+                            }}
                             className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
                             title="Eliminar correo"
                           >
@@ -894,6 +957,22 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
         onClose={() => setIsEditCategoryOpen(false)}
         category={activeCategory}
         onSave={onUpdateCategory}
+      />
+
+      {/* Confirm Action Modal */}
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        confirmLabel={confirmModal.confirmLabel}
+        isDestructive={confirmModal.isDestructive}
+        isLoading={isConfirmLoading}
+        onConfirm={confirmModal.onConfirm}
+        onCancel={() => {
+          if (!isConfirmLoading) {
+            setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+          }
+        }}
       />
     </div>
   );

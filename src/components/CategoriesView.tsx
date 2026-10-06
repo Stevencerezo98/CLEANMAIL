@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { FolderTree, Plus, Trash2, Layers, CheckCircle2, ShieldCheck, Edit } from 'lucide-react';
 import { Categoria } from '../server/db/schema.ts';
 import { EditCategoryModal } from './EditCategoryModal.tsx';
+import { ConfirmModal } from './ConfirmModal.tsx';
 
 interface CategoriesViewProps {
   categories: Categoria[];
@@ -26,6 +27,8 @@ export const CategoriesView: React.FC<CategoriesViewProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [editingCat, setEditingCat] = useState<Categoria | null>(null);
+  const [catToDelete, setCatToDelete] = useState<Categoria | null>(null);
+  const [isDeletingCat, setIsDeletingCat] = useState(false);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -114,15 +117,7 @@ export const CategoriesView: React.FC<CategoriesViewProps> = ({
 
                     {cat.id !== 'cat-general' && (
                       <button
-                        onClick={() => {
-                          if (
-                            window.confirm(
-                              `¿Estás seguro de eliminar la categoría "${cat.nombre}" y todos sus correos asociados?`
-                            )
-                          ) {
-                            onDeleteCategory(cat.id);
-                          }
-                        }}
+                        onClick={() => setCatToDelete(cat)}
                         className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
                         title="Eliminar categoría"
                       >
@@ -182,6 +177,31 @@ export const CategoriesView: React.FC<CategoriesViewProps> = ({
         onClose={() => setEditingCat(null)}
         category={editingCat}
         onSave={onUpdateCategory}
+      />
+
+      {/* Delete Category Confirmation Modal */}
+      <ConfirmModal
+        isOpen={Boolean(catToDelete)}
+        title="Eliminar categoría"
+        message={`¿Estás seguro de eliminar la categoría "${catToDelete?.nombre}" y todos sus correos asociados? Esta acción no se puede deshacer.`}
+        confirmLabel="Eliminar lista"
+        isDestructive={true}
+        isLoading={isDeletingCat}
+        onConfirm={async () => {
+          if (!catToDelete) return;
+          setIsDeletingCat(true);
+          try {
+            await onDeleteCategory(catToDelete.id);
+            setCatToDelete(null);
+          } catch (err) {
+            setErrorMsg((err as Error).message || 'Error al eliminar categoría.');
+          } finally {
+            setIsDeletingCat(false);
+          }
+        }}
+        onCancel={() => {
+          if (!isDeletingCat) setCatToDelete(null);
+        }}
       />
 
       {/* Info card */}

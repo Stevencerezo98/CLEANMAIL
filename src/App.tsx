@@ -10,6 +10,8 @@ import { SettingsView } from './components/SettingsView.tsx';
 import { TerminologyView, FaqView } from './components/InfoViews.tsx';
 import { NewCategoryModal } from './components/NewCategoryModal.tsx';
 import { LoginView } from './components/LoginView.tsx';
+import { LandingView } from './components/LandingView.tsx';
+import { PlansManagerView } from './components/PlansManagerView.tsx';
 import {
   Categoria,
   Correo,
@@ -33,6 +35,15 @@ export default function App() {
   });
 
   const [activeTab, setActiveTab] = useState<CleanMailTab>('list');
+  const [showLanding, setShowLanding] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('cleanmail_session');
+      return !saved;
+    } catch {
+      return true;
+    }
+  });
+  const [showLoginModal, setShowLoginModal] = useState(false);
   const [categories, setCategories] = useState<Categoria[]>([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('');
   const [correos, setCorreos] = useState<Correo[]>([]);
@@ -173,6 +184,8 @@ export default function App() {
     }
     localStorage.removeItem('cleanmail_session');
     setSession(null);
+    setShowLanding(true);
+    setShowLoginModal(false);
   };
 
   // Crear categoría POST /api/categories
@@ -249,33 +262,52 @@ export default function App() {
   // Eliminar correo individual DELETE /api/emails/:id
   const handleDeleteEmail = async (id: string) => {
     try {
+      // Actualización optimista inmediata en la UI
+      setCorreos((prev) => prev.filter((c) => c.id !== id));
+      setTotalRecords((prev) => Math.max(0, prev - 1));
+
       const res = await fetch(`/api/emails/${id}`, { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok || !data.success) {
         throw new Error(data.message || 'Error al eliminar correo.');
       }
-      fetchEmails();
+      const targetCat = selectedCategoryId || (categories.length > 0 ? categories[0].id : '');
+      if (targetCat) fetchEmails(targetCat);
       fetchCategories();
       fetchGlobalStats();
     } catch (err) {
-      console.error(err);
+      console.error('Error al eliminar correo:', err);
+      fetchEmails();
+      throw err;
     }
   };
 
   // Borrado masivo POST /api/emails/bulk-delete
   const handleBulkDelete = async (ids: string[]) => {
-    const res = await fetch('/api/emails/bulk-delete', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids }),
-    });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      throw new Error(data.message || 'Error en borrado masivo.');
+    try {
+      // Actualización optimista inmediata
+      const idSet = new Set(ids);
+      setCorreos((prev) => prev.filter((c) => !idSet.has(c.id)));
+      setTotalRecords((prev) => Math.max(0, prev - ids.length));
+
+      const res = await fetch('/api/emails/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Error en borrado masivo.');
+      }
+      const targetCat = selectedCategoryId || (categories.length > 0 ? categories[0].id : '');
+      if (targetCat) fetchEmails(targetCat);
+      fetchCategories();
+      fetchGlobalStats();
+    } catch (err) {
+      console.error('Error en borrado masivo:', err);
+      fetchEmails();
+      throw err;
     }
-    fetchEmails();
-    fetchCategories();
-    fetchGlobalStats();
   };
 
   // Mover correos masivamente POST /api/emails/bulk-move
@@ -289,25 +321,39 @@ export default function App() {
     if (!res.ok || !data.success) {
       throw new Error(data.message || 'Error al mover correos.');
     }
+    const idSet = new Set(ids);
+    setCorreos((prev) => prev.filter((c) => !idSet.has(c.id)));
+    setTotalRecords((prev) => Math.max(0, prev - ids.length));
     fetchEmails();
     fetchCategories();
   };
 
   // Purgar todos los inválidos de la categoría activa
   const handlePurgeInvalid = async () => {
-    if (!selectedCategoryId) return;
-    const res = await fetch('/api/emails/bulk-delete-filter', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ categoria_id: selectedCategoryId, filter: 'INVALIDOS' }),
-    });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      throw new Error(data.message || 'Error al purgar inválidos.');
+    const targetCat = selectedCategoryId || (categories.length > 0 ? categories[0].id : '');
+    if (!targetCat) return;
+
+    try {
+      // Actualización optimista inmediata
+      setCorreos((prev) => prev.filter((c) => c.estado !== 'INVALIDO'));
+
+      const res = await fetch('/api/emails/bulk-delete-filter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ categoria_id: targetCat, filter: 'INVALIDOS' }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Error al purgar inválidos.');
+      }
+      fetchEmails(targetCat);
+      fetchCategories();
+      fetchGlobalStats();
+    } catch (err) {
+      console.error('Error al purgar inválidos:', err);
+      fetchEmails();
+      throw err;
     }
-    fetchEmails();
-    fetchCategories();
-    fetchGlobalStats();
   };
 
   // Mover todas las cuentas de rol a una lista de revisión aislada
@@ -364,9 +410,39 @@ export default function App() {
     }
   };
 
-  // Si no hay sesión autenticada, mostrar pantalla de Login
+  // Si no hay sesión autenticada
   if (!session) {
-    return <LoginView onLoginSuccess={(sess) => setSession(sess)} />;
+    if (showLoginModal) {
+      return (
+        <LoginView
+          onLoginSuccess={(sess) => {
+            setSession(sess);
+            setShowLanding(false);
+            setShowLoginModal(false);
+          }}
+          onGoToLanding={() => setShowLoginModal(false)}
+        />
+      );
+    }
+
+    return (
+      <LandingView
+        onGoToLogin={() => setShowLoginModal(true)}
+        session={null}
+        onGoToDashboard={() => setShowLoginModal(true)}
+      />
+    );
+  }
+
+  // Si el usuario con sesión activa desea previsualizar la landing pública
+  if (showLanding) {
+    return (
+      <LandingView
+        onGoToLogin={() => setShowLanding(false)}
+        session={session}
+        onGoToDashboard={() => setShowLanding(false)}
+      />
+    );
   }
 
   const totalAllEmails = categories.reduce((acc, c) => acc + (c.total_correos || 0), 0);
@@ -380,8 +456,8 @@ export default function App() {
         <CleanMailSidebar
           activeTab={activeTab}
           onSelectTab={(tab) => {
-            // Protección de rol: Si no es admin y quiere entrar a admin_config, redirigir
-            if (tab === 'admin_config' && session.role !== 'admin') {
+            // Protección de rol: Si no es admin y quiere entrar a admin_config o planes, redirigir
+            if ((tab === 'admin_config' || tab === 'plans') && session.role !== 'admin') {
               setActiveTab('list');
               return;
             }
@@ -390,6 +466,7 @@ export default function App() {
           categoriesCount={categories.length}
           totalEmails={totalAllEmails}
           userRole={session.role}
+          onOpenLanding={() => setShowLanding(true)}
         />
       </div>
 
@@ -404,7 +481,7 @@ export default function App() {
             <CleanMailSidebar
               activeTab={activeTab}
               onSelectTab={(tab) => {
-                if (tab === 'admin_config' && session.role !== 'admin') {
+                if ((tab === 'admin_config' || tab === 'plans') && session.role !== 'admin') {
                   setActiveTab('list');
                 } else {
                   setActiveTab(tab);
@@ -414,6 +491,10 @@ export default function App() {
               categoriesCount={categories.length}
               totalEmails={totalAllEmails}
               userRole={session.role}
+              onOpenLanding={() => {
+                setIsMobileSidebarOpen(false);
+                setShowLanding(true);
+              }}
             />
           </div>
         </div>
@@ -436,6 +517,7 @@ export default function App() {
           onToggleMobileSidebar={() => setIsMobileSidebarOpen(!isMobileSidebarOpen)}
           onLogout={handleLogout}
           onGoToAdminConfig={() => setActiveTab('admin_config')}
+          onOpenLanding={() => setShowLanding(true)}
         />
 
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto">
@@ -509,6 +591,14 @@ export default function App() {
               onUpdateCategory={handleUpdateCategory}
               onDeleteCategory={handleDeleteCategory}
               onGoToVerifyList={() => setActiveTab('list')}
+            />
+          )}
+
+          {/* Gestión de Planes de Depuración (Exclusivo Administrador: no sale a nadie más) */}
+          {activeTab === 'plans' && session.role === 'admin' && (
+            <PlansManagerView
+              session={session}
+              onPreviewLanding={() => setShowLanding(true)}
             />
           )}
 

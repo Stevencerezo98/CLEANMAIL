@@ -11,6 +11,8 @@ import {
   TrendingUp,
   Settings,
   ShieldAlert,
+  CreditCard,
+  ExternalLink,
 } from 'lucide-react';
 import { UserRole } from '../server/db/schema.ts';
 
@@ -20,6 +22,7 @@ export type CleanMailTab =
   | 'analytics'
   | 'categories'
   | 'admin_config'
+  | 'plans'
   | 'api'
   | 'faq'
   | 'terminology';
@@ -30,6 +33,7 @@ interface SidebarProps {
   categoriesCount: number;
   totalEmails: number;
   userRole?: UserRole;
+  onOpenLanding?: () => void;
 }
 
 export const CleanMailSidebar: React.FC<SidebarProps> = ({
@@ -37,6 +41,7 @@ export const CleanMailSidebar: React.FC<SidebarProps> = ({
   onSelectTab,
   categoriesCount,
   userRole,
+  onOpenLanding,
 }) => {
   const isAdmin = userRole === 'admin';
 
@@ -134,12 +139,29 @@ export const CleanMailSidebar: React.FC<SidebarProps> = ({
           </button>
         </div>
 
-        {/* Section: ADMINISTRACIÓN (Solo Administrador) */}
+        {/* Section: ADMINISTRACIÓN (Exclusivo Administrador: no le sale a nadie más) */}
         {isAdmin && (
           <div className="space-y-1 pt-1">
             <p className="px-3 text-[10px] font-bold text-purple-200 uppercase tracking-wider flex items-center gap-1.5">
-              <span>ADMINISTRACIÓN</span>
+              <span>ADMINISTRACIÓN EXCLUSIVA</span>
             </p>
+
+            <button
+              onClick={() => onSelectTab('plans')}
+              className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-medium transition cursor-pointer ${
+                activeTab === 'plans'
+                  ? 'bg-white/25 text-white font-bold shadow-inner border border-white/30'
+                  : 'text-purple-100 hover:text-white hover:bg-white/10'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <CreditCard className="w-4 h-4" />
+                <span>Planes de Depuración</span>
+              </div>
+              <span className="text-[9px] bg-purple-900/40 text-purple-100 px-1.5 py-0.5 rounded font-bold">
+                ADMIN
+              </span>
+            </button>
 
             <button
               onClick={() => onSelectTab('admin_config')}
@@ -151,11 +173,8 @@ export const CleanMailSidebar: React.FC<SidebarProps> = ({
             >
               <div className="flex items-center gap-3">
                 <Settings className="w-4 h-4" />
-                <span>Configuración & Plan</span>
+                <span>Configuración Sistema</span>
               </div>
-              <span className="text-[9px] bg-purple-900/40 text-purple-100 px-1.5 py-0.5 rounded font-bold">
-                ADMIN
-              </span>
             </button>
 
             <button
@@ -168,6 +187,19 @@ export const CleanMailSidebar: React.FC<SidebarProps> = ({
             >
               <Code2 className="w-4 h-4" />
               <span>API & Proveedores</span>
+            </button>
+          </div>
+        )}
+
+        {/* Section: ACCESO RÁPIDO A LANDING */}
+        {onOpenLanding && (
+          <div className="pt-1">
+            <button
+              onClick={onOpenLanding}
+              className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-semibold bg-white/10 hover:bg-white/20 text-white transition cursor-pointer border border-white/15"
+            >
+              <ExternalLink className="w-3.5 h-3.5 text-white" />
+              <span>Ver Landing de Planes</span>
             </button>
           </div>
         )}

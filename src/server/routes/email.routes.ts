@@ -7,7 +7,7 @@ const router = Router();
 // Endpoint: POST /api/emails/upload - Subir archivos para depuración
 router.post(
   '/upload',
-  uploadMiddleware.any(),
+  uploadMiddleware.any() as any,
   EmailController.uploadAndProcess
 );
 

@@ -6,7 +6,7 @@ interface DatabaseData {
   categorias: Categoria[];
   correos: Correo[];
   config?: SystemConfig;
-  landingPlans?: LandingPlan[];
+  landingPlans: LandingPlan[];
 }
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
@@ -110,6 +110,7 @@ class Database {
     categorias: [],
     correos: [],
     config: DEFAULT_CONFIG,
+    landingPlans: [],
   };
   private isLoaded = false;
 
@@ -146,6 +147,10 @@ class Database {
             creditosUsados: this.data.correos.length,
           };
         }
+
+        if (!this.data.landingPlans || !Array.isArray(this.data.landingPlans) || this.data.landingPlans.length === 0) {
+          this.data.landingPlans = JSON.parse(JSON.stringify(DEFAULT_LANDING_PLANS));
+        }
       } else {
         const now = new Date().toISOString();
         this.data = {
@@ -154,13 +159,14 @@ class Database {
           ],
           correos: [],
           config: DEFAULT_CONFIG,
+          landingPlans: JSON.parse(JSON.stringify(DEFAULT_LANDING_PLANS)),
         };
         this.persist();
       }
       this.isLoaded = true;
     } catch (error) {
       console.error('Error inicializando la base de datos local:', error);
-      this.data = { categorias: [], correos: [], config: DEFAULT_CONFIG };
+      this.data = { categorias: [], correos: [], config: DEFAULT_CONFIG, landingPlans: [] };
     }
   }
 
@@ -196,6 +202,57 @@ class Database {
     };
     this.persist();
     return this.data.config;
+  }
+
+  // --- MÉTODOS DE PLANES DE DEPURACIÓN (LANDING) ---
+
+  public getLandingPlans(): LandingPlan[] {
+    if (!this.data.landingPlans || !Array.isArray(this.data.landingPlans) || this.data.landingPlans.length === 0) {
+      this.data.landingPlans = JSON.parse(JSON.stringify(DEFAULT_LANDING_PLANS));
+      this.persist();
+    }
+    return this.data.landingPlans;
+  }
+
+  public updateLandingPlan(id: string, updates: Partial<LandingPlan>): LandingPlan | null {
+    const plans = this.getLandingPlans();
+    const idx = plans.findIndex((p) => p.id === id);
+    if (idx === -1) return null;
+
+    plans[idx] = {
+      ...plans[idx],
+      ...updates,
+      id, // inmutable
+    };
+    this.persist();
+    return plans[idx];
+  }
+
+  public createLandingPlan(plan: Omit<LandingPlan, 'id'>): LandingPlan {
+    const plans = this.getLandingPlans();
+    const id = 'plan-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6);
+    const newPlan: LandingPlan = {
+      ...plan,
+      id,
+    };
+    plans.push(newPlan);
+    this.persist();
+    return newPlan;
+  }
+
+  public deleteLandingPlan(id: string): boolean {
+    const plans = this.getLandingPlans();
+    const idx = plans.findIndex((p) => p.id === id);
+    if (idx === -1) return false;
+    plans.splice(idx, 1);
+    this.persist();
+    return true;
+  }
+
+  public resetLandingPlans(): LandingPlan[] {
+    this.data.landingPlans = JSON.parse(JSON.stringify(DEFAULT_LANDING_PLANS));
+    this.persist();
+    return this.data.landingPlans;
   }
 
   // --- MÉTODOS DE CATEGORÍAS ---

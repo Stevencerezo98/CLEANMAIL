@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
-import { Lock, User, Eye, EyeOff, ShieldCheck, MailCheck, AlertCircle } from 'lucide-react';
+import { Lock, User, Eye, EyeOff, ShieldCheck, MailCheck, AlertCircle, ArrowLeft } from 'lucide-react';
 import { UserSession } from '../server/db/schema.ts';
 
 interface LoginViewProps {
   onLoginSuccess: (session: UserSession) => void;
+  onGoToLanding?: () => void;
 }
 
-export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
+export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, onGoToLanding }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -71,6 +72,17 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
 
         {/* Form Container */}
         <div className="p-8">
+          {onGoToLanding && (
+            <button
+              type="button"
+              onClick={onGoToLanding}
+              className="mb-4 inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-[#00a2c7] font-semibold transition cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Volver a la Landing de Planes</span>
+            </button>
+          )}
+
           <div className="mb-6">
             <h2 className="text-xl font-extrabold text-slate-800">Iniciar Sesión</h2>
             <p className="text-xs text-slate-500 mt-0.5">

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, ChevronDown, RefreshCw, Menu, LogOut, ShieldCheck, UserCheck, Settings } from 'lucide-react';
+import { Plus, ChevronDown, RefreshCw, Menu, LogOut, ShieldCheck, UserCheck, Settings, ExternalLink } from 'lucide-react';
 import { UserSession } from '../server/db/schema.ts';
 
 interface TopBarProps {
@@ -13,6 +13,7 @@ interface TopBarProps {
   onToggleMobileSidebar: () => void;
   onLogout: () => void;
   onGoToAdminConfig: () => void;
+  onOpenLanding?: () => void;
 }
 
 export const CleanMailTopBar: React.FC<TopBarProps> = ({
@@ -26,6 +27,7 @@ export const CleanMailTopBar: React.FC<TopBarProps> = ({
   onToggleMobileSidebar,
   onLogout,
   onGoToAdminConfig,
+  onOpenLanding,
 }) => {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 
@@ -73,6 +75,18 @@ export const CleanMailTopBar: React.FC<TopBarProps> = ({
           </span>
           <span className="text-[10px] text-slate-400 ml-1">({totalEmails} en lista)</span>
         </div>
+
+        {/* Ver Landing Button */}
+        {onOpenLanding && (
+          <button
+            onClick={onOpenLanding}
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-bold transition shadow-2xs cursor-pointer"
+            title="Ver la Landing pública de planes"
+          >
+            <ExternalLink className="w-3.5 h-3.5 text-[#00a2c7]" />
+            <span>Landing Planes</span>
+          </button>
+        )}
 
         {/* + Nueva Lista Button */}
         <button
@@ -131,6 +145,19 @@ export const CleanMailTopBar: React.FC<TopBarProps> = ({
                 >
                   <Settings className="w-3.5 h-3.5" />
                   <span>Configuración & Plan</span>
+                </button>
+              )}
+
+              {onOpenLanding && (
+                <button
+                  onClick={() => {
+                    setIsDropdownOpen(false);
+                    onOpenLanding();
+                  }}
+                  className="w-full px-4 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-[#00a2c7]/10 hover:text-[#00a2c7] flex items-center gap-2 cursor-pointer"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Ver Landing de Planes</span>
                 </button>
               )}
 

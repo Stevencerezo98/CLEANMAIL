@@ -81,7 +81,7 @@ export const EmailTable: React.FC<EmailTableProps> = ({
       window.URL.revokeObjectURL(downloadUrl);
       document.body.removeChild(a);
     } catch (err) {
-      alert((err as Error).message || 'No se pudo exportar el CSV.');
+      console.error('Export error:', err);
     } finally {
       setIsExporting(false);
     }
