@@ -3,6 +3,7 @@ import { EmailService } from '../services/email.service.ts';
 import { CategoryService } from '../services/category.service.ts';
 import { parseFileContent } from '../utils/fileParser.ts';
 import { EstadoEmail, TipoEmail, ExternalValidationProvider } from '../db/schema.ts';
+import { db } from '../db/database.ts';
 
 export class EmailController {
   /**
@@ -68,11 +69,40 @@ export class EmailController {
         });
       }
 
+      // 1. Verificación estricta de cupo y límites del plan de la cuenta
+      const currentConfig = db.getSystemConfig();
+      const requiredCredits = allExtractedEmails.length;
+      const isUnlimited = currentConfig.planType === 'unlimited';
+
+      if (!isUnlimited) {
+        if ((currentConfig.creditosDisponibles ?? 0) <= 0) {
+          return res.status(403).json({
+            success: false,
+            quotaExceeded: true,
+            message: `Límite de depuración alcanzado. Tu cuenta dispone de 0 créditos en el ${currentConfig.planName}. Para continuar depurando listas, por favor actualiza tu plan.`,
+            availableCredits: 0,
+            requiredCredits,
+            currentPlan: currentConfig.planName,
+          });
+        }
+
+        if (currentConfig.creditosDisponibles < requiredCredits) {
+          return res.status(403).json({
+            success: false,
+            quotaExceeded: true,
+            message: `Créditos insuficientes en tu cuenta. Tu plan actual dispone de ${currentConfig.creditosDisponibles.toLocaleString()} créditos pero el archivo contiene ${requiredCredits.toLocaleString()} correos. Actualiza tu plan para aumentar el cupo de depuración.`,
+            availableCredits: currentConfig.creditosDisponibles,
+            requiredCredits,
+            currentPlan: currentConfig.planName,
+          });
+        }
+      }
+
       const checkDns = req.body.check_dns !== 'false' && req.body.check_dns !== false;
       const autoCorrect = req.body.auto_correct !== 'false' && req.body.auto_correct !== false;
 
       // Opciones de verificación externa
-      const verifyExternal = req.body.verify_external === 'true' || req.body.verify_external === true;
+      const verifyExternal = req.body.verify_external !== 'false' && req.body.verify_external !== false;
       const externalProvider = (req.body.external_provider as ExternalValidationProvider) || 'debounce';
       const apiKey = req.body.api_key as string | undefined;
 
@@ -87,9 +117,19 @@ export class EmailController {
         },
       });
 
+      // 2. Deducir créditos reales utilizados por la cuenta
+      if (!isUnlimited) {
+        const creditsDeducted = allExtractedEmails.length;
+        const newAvailable = Math.max(0, currentConfig.creditosDisponibles - creditsDeducted);
+        db.updateSystemConfig({
+          creditosDisponibles: newAvailable,
+          creditosUsados: (currentConfig.creditosUsados || 0) + creditsDeducted,
+        });
+      }
+
       return res.status(200).json({
         success: true,
-        message: `Procesamiento finalizado con éxito. ${summary.validos} válidos, ${summary.genericos_rol} de rol, ${summary.invalidos} inválidos, ${summary.duplicados_omitidos} duplicados omitidos. Score promedio: ${summary.promedio_score}/100.`,
+        message: `Procesamiento finalizado con éxito. ${summary.validos} válidos, ${summary.genericos_rol} de rol/riesgosos, ${summary.invalidos} inválidos, ${summary.duplicados_omitidos} duplicados omitidos. Score promedio: ${summary.promedio_score}/100.`,
         data: summary,
       });
     } catch (error) {
@@ -190,11 +230,35 @@ export class EmailController {
         return res.status(400).json({ success: false, message: 'El campo "email" es requerido.' });
       }
 
+      // Verificación de cupo disponible del plan
+      const currentConfig = db.getSystemConfig();
+      const isUnlimited = currentConfig.planType === 'unlimited';
+
+      if (!isUnlimited && (currentConfig.creditosDisponibles ?? 0) <= 0) {
+        return res.status(403).json({
+          success: false,
+          quotaExceeded: true,
+          message: `Límite de depuración alcanzado. Has agotado los créditos de tu plan (${currentConfig.planName}). Para continuar verificando correos, por favor actualiza tu plan.`,
+          availableCredits: 0,
+          requiredCredits: 1,
+          currentPlan: currentConfig.planName,
+        });
+      }
+
       const result = await EmailService.validateSingleEmail(email, {
         enabled: true,
         provider: provider || 'debounce',
         apiKey: api_key,
       });
+
+      // Deducir 1 crédito de la cuenta
+      if (!isUnlimited) {
+        db.updateSystemConfig({
+          creditosDisponibles: Math.max(0, currentConfig.creditosDisponibles - 1),
+          creditosUsados: (currentConfig.creditosUsados || 0) + 1,
+        });
+      }
+
       return res.json({ success: true, data: result });
     } catch (error) {
       const err = error as Error;

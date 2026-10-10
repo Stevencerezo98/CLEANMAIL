@@ -28906,9 +28906,90 @@
     }
   ],
   "config": {
-    "planName": "Plan Ilimitado 2026",
-    "planType": "unlimited",
-    "creditosDisponibles": 500000,
-    "creditosUsados": 1806
-  }
+    "planName": "Profesional Growth",
+    "planType": "pro",
+    "creditosDisponibles": 50000,
+    "creditosUsados": 1806,
+    "limiteMensual": null
+  },
+  "landingPlans": [
+    {
+      "id": "plan-starter",
+      "name": "Básico / Starter",
+      "badge": "Para Comenzar",
+      "credits": 10000,
+      "price": 19,
+      "currency": "USD",
+      "period": "pago único",
+      "description": "Ideal para pequeñas empresas y depuración de listas puntuales.",
+      "features": [
+        "10,000 Verificaciones de correo",
+        "Validación estricta de sintaxis RFC",
+        "Comprobación de servidores DNS MX en vivo",
+        "Autocorrección de errores de tipeo (.gmai -> .gmail)",
+        "Exportación ilimitada a CSV limpio"
+      ],
+      "popular": false,
+      "active": true
+    },
+    {
+      "id": "plan-pro",
+      "name": "Profesional Growth",
+      "badge": "Más Popular",
+      "credits": 50000,
+      "price": 49,
+      "currency": "USD",
+      "period": "pago único",
+      "description": "El paquete más elegido para agencias y campañas de Email Marketing.",
+      "features": [
+        "50,000 Verificaciones de correo",
+        "Filtro avanzado de dominios desechables y temporales",
+        "Identificación de cuentas de rol (info@, ventas@)",
+        "Score de confianza de entregabilidad (0 a 100%)",
+        "Deduplicación automática de contactos",
+        "Soporte prioritario por email"
+      ],
+      "popular": true,
+      "active": true
+    },
+    {
+      "id": "plan-enterprise",
+      "name": "Enterprise Volume",
+      "badge": "Gran Volumen",
+      "credits": 250000,
+      "price": 149,
+      "currency": "USD",
+      "period": "pago único",
+      "description": "Alto rendimiento para plataformas SaaS, e-commerce y bases de datos masivas.",
+      "features": [
+        "250,000 Verificaciones de correo",
+        "Múltiples operadores y roles (Admin & Digitalizador)",
+        "Auditoría profunda de registros SPF y DMARC",
+        "Herramienta de purgado de rebotes duros en 1 clic",
+        "Aislamiento de cuentas departamentales a listas secundarias",
+        "Exportación CSV segmentada"
+      ],
+      "popular": false,
+      "active": true
+    },
+    {
+      "id": "plan-unlimited",
+      "name": "Ilimitado Anual",
+      "badge": "Acceso Total",
+      "credits": 1000000,
+      "price": 399,
+      "currency": "USD",
+      "period": "/año",
+      "description": "Sin restricciones de volumen ni límites de créditos para corporativos.",
+      "features": [
+        "Créditos Ilimitados de verificación",
+        "Categorías y listas ilimitadas con total aislamiento",
+        "Acceso exclusivo al panel de control de planes",
+        "Asesoría técnica para evitar listas negras (Blacklists)",
+        "SLA de disponibilidad garantizado"
+      ],
+      "popular": false,
+      "active": true
+    }
+  ]
 }

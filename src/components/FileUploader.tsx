@@ -7,8 +7,11 @@ import {
   Globe2,
   Key,
   HelpCircle,
+  AlertCircle,
+  Zap,
 } from 'lucide-react';
 import { Categoria, UploadProcessSummary, ExternalValidationProvider } from '../server/db/schema.ts';
+import { UpgradePlanModal } from './UpgradePlanModal.tsx';
 
 interface FileUploaderProps {
   categories: Categoria[];
@@ -36,6 +39,9 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
   const [progress, setProgress] = useState(0);
   const [statusMessage, setStatusMessage] = useState('');
   const [lastSummary, setLastSummary] = useState<UploadProcessSummary | null>(null);
+  const [uploadError, setUploadError] = useState('');
+  const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
+  const [upgradeModalMessage, setUpgradeModalMessage] = useState('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -74,10 +80,11 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
 
   const uploadFiles = async (files: File[]) => {
     if (!targetCategory) {
-      alert('Por favor selecciona una categoría antes de subir archivos.');
+      setUploadError('Por favor selecciona una categoría antes de subir archivos.');
       return;
     }
 
+    setUploadError('');
     setIsProcessing(true);
     setProgress(15);
     setStatusMessage(`Leyendo ${files.length} archivo(s)...`);
@@ -131,6 +138,10 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
       const result = await response.json();
 
       if (!response.ok || !result.success) {
+        if (result.quotaExceeded) {
+          setUpgradeModalMessage(result.message);
+          setIsUpgradeModalOpen(true);
+        }
         throw new Error(result.message || 'Error al procesar los archivos.');
       }
 
@@ -144,7 +155,7 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
       }
     } catch (err) {
       console.error(err);
-      alert((err as Error).message || 'Ocurrió un error al subir los archivos.');
+      setUploadError((err as Error).message || 'Ocurrió un error al subir los archivos.');
     } finally {
       setTimeout(() => {
         setIsProcessing(false);
@@ -453,6 +464,49 @@ export const FileUploader: React.FC<FileUploaderProps> = ({
           </div>
         </div>
       )}
+
+      {/* Error Banner with Upgrade Button */}
+      {uploadError && (
+        <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex flex-wrap items-center justify-between gap-3 animate-fade-in">
+          <div className="flex items-center gap-2 font-medium flex-1">
+            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            <span>{uploadError}</span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {(uploadError.toLowerCase().includes('límite') ||
+              uploadError.toLowerCase().includes('plan') ||
+              uploadError.toLowerCase().includes('crédito')) && (
+              <button
+                onClick={() => {
+                  setUpgradeModalMessage(uploadError);
+                  setIsUpgradeModalOpen(true);
+                }}
+                className="px-3 py-1 bg-[#00a2c7] hover:bg-[#0092b3] text-white font-bold rounded-lg transition flex items-center gap-1 cursor-pointer"
+              >
+                <Zap className="w-3.5 h-3.5" />
+                <span>Actualizar Plan</span>
+              </button>
+            )}
+            <button
+              onClick={() => setUploadError('')}
+              className="text-slate-400 hover:text-slate-200 font-bold px-2 py-1 cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Upgrade Plan Modal */}
+      <UpgradePlanModal
+        isOpen={isUpgradeModalOpen}
+        onClose={() => setIsUpgradeModalOpen(false)}
+        currentConfig={null}
+        onPlanUpgraded={() => {
+          setUploadError('');
+        }}
+        message={upgradeModalMessage}
+      />
     </div>
   );
 };

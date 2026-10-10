@@ -87,7 +87,7 @@ export const EmailTable: React.FC<EmailTableProps> = ({
     }
   };
 
-  const getEstadoBadge = (estado: EstadoEmail) => {
+  const getEstadoBadge = (estado: EstadoEmail, tipo?: TipoEmail) => {
     switch (estado) {
       case 'VALIDO':
         return (
@@ -96,9 +96,16 @@ export const EmailTable: React.FC<EmailTableProps> = ({
           </span>
         );
       case 'GENERICO_ROL':
+        if (tipo === 'De_Rol') {
+          return (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/10 text-purple-300 border border-purple-500/20">
+              <Users className="w-3 h-3" /> ROL / DEPTO
+            </span>
+          );
+        }
         return (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/10 text-amber-400 border border-amber-500/20">
-            <Users className="w-3 h-3" /> ROL / GENÉRICO
+            <AlertTriangle className="w-3 h-3" /> RIESGOSO
           </span>
         );
       case 'INVALIDO':
@@ -302,7 +309,7 @@ export const EmailTable: React.FC<EmailTableProps> = ({
                   </td>
 
                   {/* Estado */}
-                  <td className="px-4 py-2.5">{getEstadoBadge(item.estado)}</td>
+                  <td className="px-4 py-2.5">{getEstadoBadge(item.estado, item.tipo)}</td>
 
                   {/* Tipo */}
                   <td className="px-4 py-2.5">{getTipoBadge(item.tipo)}</td>

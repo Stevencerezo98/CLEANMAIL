@@ -5,7 +5,9 @@ import {
   XCircle,
   Search,
   Trash2,
+  Zap,
 } from 'lucide-react';
+import { UpgradePlanModal } from './UpgradePlanModal.tsx';
 
 interface SingleRequestItem {
   id: string;
@@ -47,6 +49,9 @@ export const SingleEmailView: React.FC = () => {
   const [requestsHistory, setRequestsHistory] = useState<SingleRequestItem[]>([]);
   const [errorMsg, setErrorMsg] = useState('');
 
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const [upgradeMessage, setUpgradeMessage] = useState('');
+
   const handleVerify = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = emailInput.trim();
@@ -64,6 +69,10 @@ export const SingleEmailView: React.FC = () => {
 
       const res = await response.json();
       if (!response.ok || !res.success) {
+        if (res.quotaExceeded) {
+          setUpgradeMessage(res.message);
+          setShowUpgradeModal(true);
+        }
         throw new Error(res.message || 'Error al validar el correo.');
       }
 
@@ -264,7 +273,19 @@ export const SingleEmailView: React.FC = () => {
             )}
           </button>
         </div>
-        {errorMsg && <p className="text-xs text-rose-500 mt-2 font-medium">{errorMsg}</p>}
+        {errorMsg && (
+          <div className="mt-3 p-3 rounded-xl bg-rose-50 border border-rose-200 text-xs flex flex-wrap items-center justify-between gap-2">
+            <span className="text-rose-700 font-semibold">{errorMsg}</span>
+            <button
+              type="button"
+              onClick={() => setShowUpgradeModal(true)}
+              className="px-3 py-1 bg-[#00a2c7] hover:bg-[#0092b3] text-white font-bold rounded-lg transition flex items-center gap-1 cursor-pointer shrink-0"
+            >
+              <Zap className="w-3.5 h-3.5" />
+              <span>Actualizar Plan</span>
+            </button>
+          </div>
+        )}
       </form>
 
       {/* Requests Section */}
@@ -427,6 +448,16 @@ export const SingleEmailView: React.FC = () => {
           </div>
         )}
       </div>
+
+      <UpgradePlanModal
+        isOpen={showUpgradeModal}
+        onClose={() => setShowUpgradeModal(false)}
+        currentConfig={null}
+        onPlanUpgraded={() => {
+          setErrorMsg('');
+        }}
+        message={upgradeMessage}
+      />
     </div>
   );
 };

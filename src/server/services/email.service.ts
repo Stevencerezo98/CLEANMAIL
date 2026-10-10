@@ -189,39 +189,58 @@ export class EmailService {
             mxValido = true;
           }
 
-          // 7. Puntuación de Confianza Adicional (Evaluación Externa Opcional)
-          let scoreConfianza = estado === 'VALIDO' ? 85 : estado === 'GENERICO_ROL' ? 55 : 10;
-          let verificadoExterno = false;
-          let fuenteVerificacion = 'Local';
+          // 7. Puntuación de Confianza Adicional y Evaluación Reputacional
+          let scoreConfianza = 80;
+          let verificadoExterno = true;
+          let fuenteVerificacion = 'Local + DNS MX';
 
-          if (options.externalVerify?.enabled) {
-            try {
-              const extRes = await ExternalValidatorService.evaluateConfidenceScore(
-                normalizedEmail,
-                domain,
-                mxValido,
-                isRole,
-                isDisposableLocal,
-                syntaxRes.isValid,
-                options.externalVerify
-              );
+          try {
+            const extOptionsToUse: ExternalVerifyOptions = options.externalVerify || {
+              enabled: true,
+              provider: 'debounce',
+            };
 
-              scoreConfianza = extRes.score;
-              verificadoExterno = true;
-              fuenteVerificacion = extRes.provider;
+            const extRes = await ExternalValidatorService.evaluateConfidenceScore(
+              normalizedEmail,
+              domain,
+              mxValido,
+              isRole,
+              isDisposableLocal,
+              syntaxRes.isValid,
+              extOptionsToUse
+            );
 
-              if (extRes.details) {
-                observacion += ` | ${extRes.details}`;
-              }
+            scoreConfianza = extRes.score;
+            fuenteVerificacion = extRes.provider;
 
-              // Sincronizar estado real según el resultado externo
-              if ((extRes.score < 35 || !extRes.isDeliverable) && estado === 'VALIDO') {
-                estado = 'INVALIDO';
-              } else if (extRes.reasonCode === 'UNVERIFIED_MAILBOX' && estado === 'VALIDO') {
-                estado = 'GENERICO_ROL';
-              }
-            } catch (err) {
-              console.warn('Fallo en verificación externa para:', normalizedEmail, err);
+            if (extRes.details) {
+              observacion += ` | ${extRes.details}`;
+            }
+
+            // Sincronizar estado real estricto según la evaluación
+            if (isRole || extRes.reasonCode === 'ROLE_ACCOUNT') {
+              estado = 'GENERICO_ROL';
+            } else if (extRes.reasonCode === 'UNVERIFIED_MAILBOX' || extRes.isCatchAll) {
+              // Buzón no confirmado en proveedor gratuito sin perfil ni nombre orgánico o servidor catch-all
+              estado = 'GENERICO_ROL';
+            } else if (!extRes.isDeliverable || extRes.score < 40) {
+              estado = 'INVALIDO';
+            } else if (extRes.isDeliverable && extRes.score >= 75) {
+              estado = 'VALIDO';
+            } else {
+              estado = 'GENERICO_ROL';
+            }
+          } catch (err) {
+            console.warn('Fallo en verificación reputacional para:', normalizedEmail, err);
+            if (isRole) {
+              estado = 'GENERICO_ROL';
+              scoreConfianza = 55;
+            } else if (!mxValido) {
+              estado = 'INVALIDO';
+              scoreConfianza = 0;
+            } else {
+              estado = 'VALIDO';
+              scoreConfianza = 80;
             }
           }
 

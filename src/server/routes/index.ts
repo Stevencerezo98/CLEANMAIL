@@ -15,6 +15,9 @@ apiRouter.use('/emails', emailRoutes);
 // Endpoint público para obtener los planes de depuración activos en la landing
 apiRouter.get('/plans', AdminController.getPublicPlans);
 
+// Endpoint para actualizar plan y recargar créditos
+apiRouter.post('/plans/upgrade', AdminController.upgradePlan);
+
 // Health check endpoint
 apiRouter.get('/health', (_req, res) => {
   res.json({

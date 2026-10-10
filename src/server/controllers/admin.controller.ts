@@ -141,4 +141,64 @@ export class AdminController {
       return res.status(500).json({ success: false, message: (err as Error).message });
     }
   }
+
+  /**
+   * Actualizar plan de cuenta y recargar créditos de depuración
+   */
+  public static upgradePlan(req: Request, res: Response) {
+    try {
+      const { planId } = req.body;
+      if (!planId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Debe especificar el ID del plan a contratar o actualizar.',
+        });
+      }
+
+      const plans = db.getLandingPlans();
+      const selectedPlan =
+        plans.find((p) => p.id === planId) ||
+        plans.find((p) => p.id === `plan-${planId}`) ||
+        plans.find((p) => p.name.toLowerCase().includes(String(planId).toLowerCase()));
+
+      if (!selectedPlan) {
+        return res.status(404).json({
+          success: false,
+          message: `El plan "${planId}" no existe en el catálogo.`,
+        });
+      }
+
+      const currentConfig = db.getSystemConfig();
+      const isUnlimited = selectedPlan.id === 'plan-unlimited' || selectedPlan.credits >= 1000000;
+      const newPlanType = isUnlimited
+        ? 'unlimited'
+        : selectedPlan.credits >= 200000
+        ? 'enterprise'
+        : selectedPlan.credits >= 40000
+        ? 'pro'
+        : 'starter';
+
+      const newCredits = isUnlimited
+        ? 1000000
+        : Math.max(selectedPlan.credits, currentConfig.creditosDisponibles + selectedPlan.credits);
+
+      const updated = db.updateSystemConfig({
+        planName: selectedPlan.name,
+        planType: newPlanType as any,
+        creditosDisponibles: newCredits,
+        limiteMensual: isUnlimited ? 1000000 : Math.max(selectedPlan.credits, currentConfig.limiteMensual),
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: `¡Plan actualizado con éxito a ${selectedPlan.name}! Tu cuenta ahora dispone de ${newCredits.toLocaleString()} créditos de depuración.`,
+        data: {
+          config: updated,
+          plan: selectedPlan,
+        },
+      });
+    } catch (err) {
+      return res.status(500).json({ success: false, message: (err as Error).message });
+    }
+  }
 }

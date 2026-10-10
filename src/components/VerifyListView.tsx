@@ -20,12 +20,14 @@ import {
   Square,
   Sparkles,
   TrendingUp,
+  Zap,
 } from 'lucide-react';
 import { Categoria, Correo, EstadoEmail, TipoEmail, UploadProcessSummary } from '../server/db/schema.ts';
 import { InteractiveAnalyticsHub } from './InteractiveAnalyticsHub.tsx';
 import { EditEmailModal } from './EditEmailModal.tsx';
 import { EditCategoryModal } from './EditCategoryModal.tsx';
 import { ConfirmModal } from './ConfirmModal.tsx';
+import { UpgradePlanModal } from './UpgradePlanModal.tsx';
 
 interface VerifyListViewProps {
   categories: Categoria[];
@@ -98,6 +100,8 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
   const [includeRolesInExport, setIncludeRolesInExport] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
   const [lastUploadSummary, setLastUploadSummary] = useState<UploadProcessSummary | null>(null);
+  const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
+  const [upgradeModalMessage, setUpgradeModalMessage] = useState('');
 
   // Bulk selection state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -200,6 +204,10 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
 
       const result = await response.json();
       if (!response.ok || !result.success) {
+        if (result.quotaExceeded) {
+          setUpgradeModalMessage(result.message);
+          setIsUpgradeModalOpen(true);
+        }
         throw new Error(result.message || 'Error al procesar el archivo.');
       }
 
@@ -353,24 +361,34 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
     });
   };
 
-  const getStatusBadge = (estado: EstadoEmail) => {
+  const getStatusBadge = (estado: EstadoEmail, tipo?: TipoEmail) => {
     switch (estado) {
       case 'VALIDO':
         return (
-          <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
-            Deliverable
+          <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 inline-flex items-center gap-1">
+            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+            <span>Deliverable</span>
           </span>
         );
       case 'GENERICO_ROL':
+        if (tipo === 'De_Rol') {
+          return (
+            <span className="text-[11px] font-bold text-purple-700 bg-purple-50 px-2.5 py-0.5 rounded-full border border-purple-200 inline-flex items-center gap-1">
+              <span>Role Account</span>
+            </span>
+          );
+        }
         return (
-          <span className="text-[11px] font-bold text-amber-700 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200">
-            Risky (Role)
+          <span className="text-[11px] font-bold text-amber-700 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200 inline-flex items-center gap-1">
+            <AlertTriangle className="w-3 h-3 text-amber-600" />
+            <span>Risky (No verificado)</span>
           </span>
         );
       case 'INVALIDO':
         return (
-          <span className="text-[11px] font-bold text-rose-700 bg-rose-50 px-2.5 py-0.5 rounded-full border border-rose-200">
-            Undeliverable
+          <span className="text-[11px] font-bold text-rose-700 bg-rose-50 px-2.5 py-0.5 rounded-full border border-rose-200 inline-flex items-center gap-1">
+            <AlertCircle className="w-3 h-3 text-rose-600" />
+            <span>Undeliverable</span>
           </span>
         );
     }
@@ -428,17 +446,33 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
 
       {/* Error Banner */}
       {errorMessage && (
-        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center justify-between animate-fade-in">
-          <div className="flex items-center gap-2 font-medium">
+        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex flex-wrap items-center justify-between gap-3 animate-fade-in">
+          <div className="flex items-center gap-2 font-medium flex-1">
             <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
             <span>{errorMessage}</span>
           </div>
-          <button
-            onClick={() => setErrorMessage('')}
-            className="text-slate-400 hover:text-slate-600 font-bold px-2 py-1 cursor-pointer"
-          >
-            ✕
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {(errorMessage.toLowerCase().includes('límite') ||
+              errorMessage.toLowerCase().includes('plan') ||
+              errorMessage.toLowerCase().includes('crédito')) && (
+              <button
+                onClick={() => {
+                  setUpgradeModalMessage(errorMessage);
+                  setIsUpgradeModalOpen(true);
+                }}
+                className="px-3 py-1 bg-[#00a2c7] hover:bg-[#0092b3] text-white font-bold rounded-lg transition flex items-center gap-1 cursor-pointer"
+              >
+                <Zap className="w-3.5 h-3.5" />
+                <span>Actualizar Plan</span>
+              </button>
+            )}
+            <button
+              onClick={() => setErrorMessage('')}
+              className="text-slate-400 hover:text-slate-600 font-bold px-2 py-1 cursor-pointer"
+            >
+              ✕
+            </button>
+          </div>
         </div>
       )}
 
@@ -834,7 +868,7 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
                         )}
                       </td>
 
-                      <td className="px-4 py-2.5">{getStatusBadge(item.estado)}</td>
+                      <td className="px-4 py-2.5">{getStatusBadge(item.estado, item.tipo)}</td>
 
                       <td className="px-4 py-2.5">
                         <span
@@ -973,6 +1007,17 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
             setConfirmModal((prev) => ({ ...prev, isOpen: false }));
           }
         }}
+      />
+
+      {/* Upgrade Plan Modal */}
+      <UpgradePlanModal
+        isOpen={isUpgradeModalOpen}
+        onClose={() => setIsUpgradeModalOpen(false)}
+        currentConfig={null}
+        onPlanUpgraded={() => {
+          setErrorMessage('');
+        }}
+        message={upgradeModalMessage}
       />
     </div>
   );

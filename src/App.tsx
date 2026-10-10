@@ -12,6 +12,7 @@ import { NewCategoryModal } from './components/NewCategoryModal.tsx';
 import { LoginView } from './components/LoginView.tsx';
 import { LandingView } from './components/LandingView.tsx';
 import { PlansManagerView } from './components/PlansManagerView.tsx';
+import { UpgradePlanModal } from './components/UpgradePlanModal.tsx';
 import {
   Categoria,
   Correo,
@@ -58,6 +59,7 @@ export default function App() {
 
   // Configuración de créditos y plan
   const [systemConfig, setSystemConfig] = useState<SystemConfig | null>(null);
+  const [isGlobalUpgradeModalOpen, setIsGlobalUpgradeModalOpen] = useState(false);
 
   const [loadingCategories, setLoadingCategories] = useState(false);
   const [loadingEmails, setLoadingEmails] = useState(false);
@@ -506,6 +508,8 @@ export default function App() {
           totalEmails={totalAllEmails}
           availableCredits={availableCredits}
           planName={activePlanName}
+          isUnlimited={systemConfig?.planType === 'unlimited'}
+          onOpenUpgradeModal={() => setIsGlobalUpgradeModalOpen(true)}
           session={session}
           onOpenNewCategoryModal={() => setIsNewCatModalOpen(true)}
           onRefresh={() => {
@@ -627,6 +631,17 @@ export default function App() {
       >
         <Smile className="w-6 h-6 stroke-[2.5]" />
       </div>
+
+      {/* Global Upgrade Plan Modal */}
+      <UpgradePlanModal
+        isOpen={isGlobalUpgradeModalOpen}
+        onClose={() => setIsGlobalUpgradeModalOpen(false)}
+        currentConfig={systemConfig}
+        onPlanUpgraded={(newConfig) => {
+          setSystemConfig(newConfig);
+          fetchGlobalStats();
+        }}
+      />
     </div>
   );
 }

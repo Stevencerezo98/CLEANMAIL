@@ -1,7 +1,7 @@
 /**
  * Servicio de Validación Externa y Puntuación de Confianza (Confidence Score)
  * Integra análisis de patrones de proveedores, perfiles de identidad activos,
- * registros SPF/DMARC y APIs de reputación de correo.
+ * heurística orgánica, registros SPF/DMARC y APIs de reputación de correo.
  */
 
 import dns from 'dns';
@@ -9,8 +9,8 @@ import { ExternalValidationProvider, ExternalVerifyOptions } from '../db/schema.
 import {
   validateProviderSpecificRules,
   detectSuspiciousPatterns,
+  isOrganicNamePattern,
   checkGravatarProfile,
-  checkDisifyPublic,
   NON_CATCH_ALL_DOMAINS,
 } from '../utils/mailboxValidator.ts';
 
@@ -130,11 +130,11 @@ export class ExternalValidatorService {
       } else if (provider === 'abstract' && options.apiKey) {
         result = await this.verifyWithAbstract(cleanEmail, options.apiKey, isRole);
       } else {
-        result = await this.verifyWithDebounceAndReputation(cleanEmail, domain, isRole);
+        result = await this.verifyWithDebounceAndReputation(cleanEmail, domain, localPart, isRole);
       }
     } catch (err) {
       console.warn(`Aviso: Error consultando API externa (${provider}), usando fallback reputacional:`, (err as Error).message);
-      result = await this.computeReputationFallback(cleanEmail, domain, isRole);
+      result = await this.computeReputationFallback(cleanEmail, domain, localPart, isRole);
     }
 
     SCORE_CACHE.set(cleanEmail, { result, timestamp: Date.now() });
@@ -147,13 +147,14 @@ export class ExternalValidatorService {
   private static async verifyWithDebounceAndReputation(
     email: string,
     domain: string,
+    localPart: string,
     isRole: boolean
   ): Promise<ExternalScoreResult> {
     let isDebounceDisposable = false;
 
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2500);
+      const timeoutId = setTimeout(() => controller.abort(), 2000);
 
       const resp = await fetch(`https://disposable.debounce.io/?email=${encodeURIComponent(email)}`, {
         signal: controller.signal,
@@ -161,7 +162,7 @@ export class ExternalValidatorService {
       clearTimeout(timeoutId);
 
       if (resp.ok) {
-        const data = await resp.json() as { disposable?: string | boolean };
+        const data = (await resp.json()) as { disposable?: string | boolean };
         isDebounceDisposable = data.disposable === 'true' || data.disposable === true;
       }
     } catch {
@@ -196,37 +197,52 @@ export class ExternalValidatorService {
       };
     }
 
-    // 2. Caso Proveedor Gratuito Principal (Gmail, Yahoo, Hotmail, Outlook) sin perfil confirmado
+    // 2. Caso Proveedor Gratuito Principal (Gmail, Yahoo, Hotmail, Outlook)
     if (isNonCatchAll) {
-      // En Gmail, Hotmail, Yahoo: los servidores MX están activos, pero sin confirmación de buzón real,
-      // no se puede etiquetar como "Deliverable / Accepted Email" definitivo si fue inventado.
+      const isOrganic = isOrganicNamePattern(localPart);
+
+      if (isOrganic) {
+        // Nombre o apellido plausible identificado (ej. carlos.mendoza, juan_perez)
+        return {
+          score: 85,
+          provider: 'Validación Heurística & DNS MX Activo',
+          isDeliverable: true,
+          reasonCode: 'ACCEPTED_EMAIL',
+          spfPresent: spf,
+          dmarcPresent: dmarc,
+          isCatchAll: false,
+          details: `Buzón personal estructurado verificado (${localPart}@${domain}). Servidores MX de ${domain} activos y autenticados (SPF/DMARC).`,
+        };
+      }
+
+      // En Gmail, Hotmail, Yahoo: los servidores MX están activos, pero sin confirmación de buzón ni patrón orgánico
+      // es un buzón con alto riesgo de haber sido inventado
       return {
-        score: 60,
+        score: 45,
         provider: 'Auditoría DNS MX + Reputación SPF/DMARC',
-        isDeliverable: true, // Se clasifica como Risky / Unverified en lugar de Undeliverable
+        isDeliverable: false, // Marcado como No confirmable / Riesgoso
         reasonCode: 'UNVERIFIED_MAILBOX',
         spfPresent: spf,
         dmarcPresent: dmarc,
         isCatchAll: false,
-        details: `Servidores MX de ${domain} activos y autenticados (SPF/DMARC). Sin embargo, el buzón no tiene perfil público confirmado. Alto riesgo de rebote si es una dirección inventada o inexistente.`,
+        details: `Servidores MX de ${domain} activos. Sin embargo, el buzón no cuenta con perfil verificado ni estructura orgánica. Alto riesgo de rebote o cuenta inventada.`,
       };
     }
 
     // 3. Caso Dominio Corporativo o Personal con registros propios
-    // Si no es de los proveedores masivos, puede estar en modo Catch-All o ser corporativo normal
     let finalScore = 80;
-    if (spf) finalScore += 5;
-    if (dmarc) finalScore += 5;
+    if (spf) finalScore += 8;
+    if (dmarc) finalScore += 7;
 
     return {
-      score: finalScore,
+      score: Math.min(finalScore, 95),
       provider: 'Auditoría DNS MX + Reputación SPF/DMARC',
       isDeliverable: true,
       reasonCode: 'ACCEPTED_EMAIL',
       spfPresent: spf,
       dmarcPresent: dmarc,
       isCatchAll: false,
-      details: `Dominio corporativo con servidores MX activos y autenticación técnica SPF/DMARC verificada (${finalScore}/100).`,
+      details: `Dominio corporativo verificado con servidores MX activos y autenticación técnica SPF/DMARC válida (${finalScore}/100).`,
     };
   }
 
@@ -245,35 +261,39 @@ export class ExternalValidatorService {
       throw new Error(`Hunter.io respondió con HTTP ${res.status}`);
     }
 
-    const data = await res.json() as {
+    const data = (await res.json()) as {
       data?: {
         score?: number;
         status?: string;
         result?: string;
+        accept_all?: boolean;
+        disposable?: boolean;
       };
     };
 
-    const hunterScore = data.data?.score ?? (isRole ? 60 : 85);
-    const resultStatus = data.data?.result || data.data?.status || 'verificado';
-    const isDeliverable = hunterScore >= 50 && resultStatus !== 'undeliverable';
+    const d = data.data || {};
+    const hunterScore = typeof d.score === 'number' ? d.score : 50;
+    const isDeliverable = d.result === 'deliverable' || d.status === 'valid' || hunterScore >= 70;
+    const isCatchAll = Boolean(d.accept_all);
 
     return {
       score: hunterScore,
       provider: 'Hunter.io API',
       isDeliverable,
-      reasonCode: isDeliverable ? 'ACCEPTED_EMAIL' : 'UNDELIVERABLE_HUNTER',
-      details: `Hunter.io Score: ${hunterScore}/100 (Estado: ${resultStatus})`,
+      reasonCode: isCatchAll ? 'CATCH_ALL' : isDeliverable ? 'ACCEPTED_EMAIL' : 'UNVERIFIED_MAILBOX',
+      isCatchAll,
+      details: `Hunter.io: resultado ${d.result || d.status || 'evaluado'} (Score: ${hunterScore}/100).`,
     };
   }
 
   /**
-   * Integración con ZeroBounce Email Validation API
+   * Integración con ZeroBounce Email Verification API
    */
   private static async verifyWithZeroBounce(email: string, apiKey: string, isRole: boolean): Promise<ExternalScoreResult> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3500);
 
-    const url = `https://api.zerobounce.net/v2/validate?email=${encodeURIComponent(email)}&api_key=${apiKey}`;
+    const url = `https://api.zerobounce.net/v2/validate?api_key=${apiKey}&email=${encodeURIComponent(email)}`;
     const res = await fetch(url, { signal: controller.signal });
     clearTimeout(timeout);
 
@@ -281,44 +301,27 @@ export class ExternalValidatorService {
       throw new Error(`ZeroBounce respondió con HTTP ${res.status}`);
     }
 
-    const data = await res.json() as {
+    const data = (await res.json()) as {
       status?: string;
       sub_status?: string;
+      free_email?: boolean;
     };
 
-    let score = 85;
-    let reasonCode = 'ACCEPTED_EMAIL';
-    let isDeliverable = true;
-
-    if (data.status === 'valid') {
-      score = 95;
-      reasonCode = 'ACCEPTED_EMAIL';
-    } else if (data.status === 'catch-all') {
-      score = 65;
-      reasonCode = 'CATCH_ALL';
-    } else if (data.status === 'spamtrap' || data.status === 'abuse') {
-      score = 10;
-      reasonCode = 'SPAM_TRAP';
-      isDeliverable = false;
-    } else if (data.status === 'invalid') {
-      score = 0;
-      reasonCode = 'UNDELIVERABLE_ZEROBOUNCE';
-      isDeliverable = false;
-    }
-
-    if (isRole && score > 60) score -= 15;
+    const status = (data.status || '').toLowerCase();
+    const isDeliverable = status === 'valid';
+    const score = isDeliverable ? 95 : status === 'catch-all' ? 55 : 15;
 
     return {
       score,
       provider: 'ZeroBounce API',
       isDeliverable,
-      reasonCode,
-      details: `ZeroBounce Estado: ${data.status || 'valid'} (${data.sub_status || 'ok'})`,
+      reasonCode: status === 'catch-all' ? 'CATCH_ALL' : isDeliverable ? 'ACCEPTED_EMAIL' : 'UNVERIFIED_MAILBOX',
+      details: `ZeroBounce: Estado ${data.status} (Sub-estado: ${data.sub_status || 'normal'}).`,
     };
   }
 
   /**
-   * Integración con AbstractAPI Email Validation
+   * Integración con Abstract Email Validation API
    */
   private static async verifyWithAbstract(email: string, apiKey: string, isRole: boolean): Promise<ExternalScoreResult> {
     const controller = new AbortController();
@@ -332,77 +335,114 @@ export class ExternalValidatorService {
       throw new Error(`AbstractAPI respondió con HTTP ${res.status}`);
     }
 
-    const data = await res.json() as {
-      quality_score?: number | string;
+    const data = (await res.json()) as {
       deliverability?: string;
-      is_disposable_email?: { value: boolean };
+      quality_score?: number | string;
+      is_catchall_email?: { value: boolean };
     };
 
-    const rawScore = typeof data.quality_score === 'number' ? data.quality_score : parseFloat(data.quality_score || '0.8');
-    const score = Math.round(rawScore * 100);
-    const isDeliverable = data.deliverability === 'DELIVERABLE' || score >= 50;
+    const qScore = Math.round(Number(data.quality_score || 0) * 100);
+    const isDeliverable = data.deliverability === 'DELIVERABLE' || qScore >= 70;
 
     return {
-      score,
-      provider: 'AbstractAPI Email Verifier',
+      score: qScore,
+      provider: 'Abstract Email API',
       isDeliverable,
-      reasonCode: isDeliverable ? 'ACCEPTED_EMAIL' : 'UNDELIVERABLE_ABSTRACT',
-      details: `AbstractAPI Calidad: ${score}/100 (Entregabilidad: ${data.deliverability || 'DELIVERABLE'})`,
+      reasonCode: isDeliverable ? 'ACCEPTED_EMAIL' : 'UNVERIFIED_MAILBOX',
+      details: `AbstractAPI: Entregabilidad ${data.deliverability || 'desconocida'} (Score: ${qScore}/100).`,
     };
   }
 
   /**
-   * Fallback de cálculo de reputación y entregabilidad
+   * Fallback reputacional en caso de fallo en APIs externas
    */
-  private static async computeReputationFallback(email: string, domain: string, isRole: boolean): Promise<ExternalScoreResult> {
+  private static async computeReputationFallback(
+    email: string,
+    domain: string,
+    localPart: string,
+    isRole: boolean
+  ): Promise<ExternalScoreResult> {
     const { spf, dmarc } = await this.checkSpfAndDmarc(domain);
+    const isNonCatchAll = NON_CATCH_ALL_DOMAINS.has(domain.toLowerCase());
 
-    let score = isRole ? 55 : 75;
-    if (spf) score += 5;
-    if (dmarc) score += 5;
+    if (isRole) {
+      return {
+        score: 55,
+        provider: 'Motor Heurístico Local',
+        isDeliverable: true,
+        reasonCode: 'ROLE_ACCOUNT',
+        spfPresent: spf,
+        dmarcPresent: dmarc,
+        details: 'Cuenta de departamento o función corporativa.',
+      };
+    }
+
+    if (isNonCatchAll) {
+      const isOrganic = isOrganicNamePattern(localPart);
+      if (isOrganic) {
+        return {
+          score: 85,
+          provider: 'Motor Heurístico Local',
+          isDeliverable: true,
+          reasonCode: 'ACCEPTED_EMAIL',
+          spfPresent: spf,
+          dmarcPresent: dmarc,
+          details: `Buzón estructurado orgánico en ${domain} con servidores MX activos.`,
+        };
+      }
+      return {
+        score: 45,
+        provider: 'Motor Heurístico Local',
+        isDeliverable: false,
+        reasonCode: 'UNVERIFIED_MAILBOX',
+        spfPresent: spf,
+        dmarcPresent: dmarc,
+        details: `Servidores MX de ${domain} activos, pero buzón no confirmado y sin estructura orgánica reconocida.`,
+      };
+    }
 
     return {
-      score: Math.min(85, score),
-      provider: 'Motor de Reputación Local',
-      isDeliverable: !isRole && score >= 70,
-      reasonCode: isRole ? 'ROLE_ACCOUNT' : 'ACCEPTED_EMAIL',
+      score: spf && dmarc ? 88 : 78,
+      provider: 'Motor Heurístico Local',
+      isDeliverable: true,
+      reasonCode: 'ACCEPTED_EMAIL',
       spfPresent: spf,
       dmarcPresent: dmarc,
-      details: `Confianza estimada por reputación técnica DNS (${score}/100)`,
+      details: `Dominio con registros MX activos y autenticación técnica validada.`,
     };
   }
 
   /**
-   * Verifica la existencia de políticas de autenticación de correo SPF y DMARC mediante registros DNS TXT
+   * Consulta registros TXT de DNS para determinar presencia de SPF y DMARC
    */
-  private static async checkSpfAndDmarc(domain: string): Promise<{ spf: boolean; dmarc: boolean }> {
+  public static async checkSpfAndDmarc(domain: string): Promise<{ spf: boolean; dmarc: boolean }> {
     let spf = false;
     let dmarc = false;
 
     try {
-      const txtRecords = await resolveTxt(domain);
+      const txtRecords = await resolveTxt(domain).catch(() => []);
       for (const record of txtRecords) {
-        const joined = record.join('');
-        if (joined.startsWith('v=spf1')) {
+        const fullTxt = record.join('').toLowerCase();
+        if (fullTxt.startsWith('v=spf1')) {
           spf = true;
           break;
         }
       }
     } catch {
-      // Sin TXT
+      // Ignorar fallo de TXT
     }
 
     try {
-      const dmarcRecords = await resolveTxt(`_dmarc.${domain}`);
+      const dmarcRecords = await resolveTxt(`_dmarc.${domain}`).catch(() => []);
       for (const record of dmarcRecords) {
-        const joined = record.join('');
-        if (joined.startsWith('v=DMARC1')) {
+        const fullTxt = record.join('').toLowerCase();
+        if (fullTxt.startsWith('v=dmarc1')) {
           dmarc = true;
           break;
         }
       }
     } catch {
-      // Sin DMARC
+      // Ignorar fallo de DMARC
     }
 
     return { spf, dmarc };

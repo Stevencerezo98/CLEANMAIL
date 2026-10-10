@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
-import { Plus, ChevronDown, RefreshCw, Menu, LogOut, ShieldCheck, UserCheck, Settings, ExternalLink } from 'lucide-react';
+import { Plus, ChevronDown, RefreshCw, Menu, LogOut, ShieldCheck, UserCheck, Settings, ExternalLink, Zap } from 'lucide-react';
 import { UserSession } from '../server/db/schema.ts';
 
 interface TopBarProps {
   totalEmails: number;
   availableCredits: number;
   planName: string;
+  isUnlimited?: boolean;
+  onOpenUpgradeModal?: () => void;
   session: UserSession | null;
   onOpenNewCategoryModal: () => void;
   onRefresh: () => void;
@@ -20,6 +22,8 @@ export const CleanMailTopBar: React.FC<TopBarProps> = ({
   totalEmails,
   availableCredits,
   planName,
+  isUnlimited,
+  onOpenUpgradeModal,
   session,
   onOpenNewCategoryModal,
   onRefresh,
@@ -68,12 +72,39 @@ export const CleanMailTopBar: React.FC<TopBarProps> = ({
         </button>
 
         {/* Available Credits / Stat */}
-        <div className="text-xs text-slate-600 font-medium hidden sm:block">
-          <span>Créditos: </span>
-          <span className="font-bold text-[#f27438] font-mono text-sm ml-1">
-            {availableCredits > 0 ? availableCredits.toLocaleString() : 'Ilimitado'}
-          </span>
-          <span className="text-[10px] text-slate-400 ml-1">({totalEmails} en lista)</span>
+        <div className="text-xs text-slate-600 font-medium hidden sm:flex items-center gap-2.5">
+          <div>
+            <span>Créditos: </span>
+            <span
+              className={`font-bold font-mono text-sm ml-1 ${
+                isUnlimited
+                  ? 'text-[#00a2c7]'
+                  : availableCredits > 0
+                  ? 'text-[#f27438]'
+                  : 'text-rose-600 font-black'
+              }`}
+            >
+              {isUnlimited
+                ? 'Ilimitado'
+                : availableCredits.toLocaleString()}
+            </span>
+            <span className="text-[10px] text-slate-400 ml-1">({totalEmails} en lista)</span>
+          </div>
+
+          {onOpenUpgradeModal && (
+            <button
+              onClick={onOpenUpgradeModal}
+              className={`px-2.5 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 cursor-pointer ${
+                availableCredits <= 0 && !isUnlimited
+                  ? 'bg-rose-600 hover:bg-rose-500 text-white animate-pulse shadow-sm'
+                  : 'bg-amber-100 hover:bg-amber-200 text-amber-900 border border-amber-300'
+              }`}
+              title="Actualizar plan y añadir más créditos"
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-700" />
+              <span>{availableCredits <= 0 && !isUnlimited ? '¡Límite! Actualizar' : 'Mejorar Plan'}</span>
+            </button>
+          )}
         </div>
 
         {/* Ver Landing Button */}
