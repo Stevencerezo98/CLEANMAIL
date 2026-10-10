@@ -3,9 +3,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   XCircle,
-  Sparkles,
   Search,
-  Globe2,
   Trash2,
 } from 'lucide-react';
 
@@ -23,12 +21,22 @@ interface SingleRequestItem {
   fuente_verificacion: string;
   detalles: {
     sintaxis: boolean;
+    error_sintaxis?: string;
     desechable: boolean;
     es_rol: boolean;
     mx: boolean;
     mx_detalle?: string;
     spf?: boolean;
     dmarc?: boolean;
+    score?: number;
+    provider?: string;
+    reasonCode?: string;
+    isCatchAll?: boolean;
+    mailboxConfirmed?: boolean;
+    providerRulesPass?: boolean;
+    providerReason?: string;
+    suspiciousPattern?: boolean;
+    patternReason?: string;
   };
   timestamp: string;
 }
@@ -78,15 +86,15 @@ export const SingleEmailView: React.FC = () => {
     setRequestsHistory([]);
   };
 
-  const getStatusBadge = (estado: string) => {
-    if (estado === 'VALIDO') {
+  const getStatusBadge = (item: SingleRequestItem) => {
+    if (item.estado === 'INVALIDO') {
       return (
-        <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-          Deliverable
+        <span className="text-xs font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full border border-rose-200">
+          Undeliverable
         </span>
       );
     }
-    if (estado === 'GENERICO_ROL') {
+    if (item.estado === 'GENERICO_ROL') {
       return (
         <span className="text-xs font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
           Risky
@@ -94,24 +102,18 @@ export const SingleEmailView: React.FC = () => {
       );
     }
     return (
-      <span className="text-xs font-bold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full border border-rose-200">
-        Undeliverable
+      <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+        Deliverable
       </span>
     );
   };
 
   const getReasonBadge = (item: SingleRequestItem) => {
-    if (item.estado === 'VALIDO') {
+    // 1. Inválidos / Undeliverable
+    if (!item.detalles.sintaxis) {
       return (
-        <span className="text-[11px] font-extrabold uppercase tracking-wide bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded">
-          ACCEPTED EMAIL
-        </span>
-      );
-    }
-    if (item.detalles.es_rol) {
-      return (
-        <span className="text-[11px] font-extrabold uppercase tracking-wide bg-[#ffe7db] text-[#e05e26] px-2 py-0.5 rounded">
-          ROLE / GENERIC ACCOUNT
+        <span className="text-[11px] font-extrabold uppercase tracking-wide bg-rose-100 text-rose-700 px-2 py-0.5 rounded">
+          INVALID SYNTAX
         </span>
       );
     }
@@ -129,11 +131,92 @@ export const SingleEmailView: React.FC = () => {
         </span>
       );
     }
+    if (item.detalles.providerRulesPass === false) {
+      return (
+        <span className="text-[11px] font-extrabold uppercase tracking-wide bg-rose-100 text-rose-700 px-2 py-0.5 rounded">
+          PROVIDER RULE REJECTED
+        </span>
+      );
+    }
+    if (item.detalles.suspiciousPattern) {
+      return (
+        <span className="text-[11px] font-extrabold uppercase tracking-wide bg-rose-100 text-rose-700 px-2 py-0.5 rounded">
+          SUSPICIOUS / TEST PATTERN
+        </span>
+      );
+    }
+    if (item.estado === 'INVALIDO') {
+      return (
+        <span className="text-[11px] font-extrabold uppercase tracking-wide bg-rose-100 text-rose-700 px-2 py-0.5 rounded">
+          UNDELIVERABLE
+        </span>
+      );
+    }
+
+    // 2. Riesgosos / Risky
+    if (item.detalles.es_rol) {
+      return (
+        <span className="text-[11px] font-extrabold uppercase tracking-wide bg-[#ffe7db] text-[#e05e26] px-2 py-0.5 rounded">
+          ROLE / GENERIC ACCOUNT
+        </span>
+      );
+    }
+    if (item.detalles.isCatchAll) {
+      return (
+        <span className="text-[11px] font-extrabold uppercase tracking-wide bg-amber-100 text-amber-800 px-2 py-0.5 rounded">
+          CATCH-ALL SERVER
+        </span>
+      );
+    }
+    if (item.detalles.reasonCode === 'UNVERIFIED_MAILBOX' || item.score_confianza < 75) {
+      return (
+        <span className="text-[11px] font-extrabold uppercase tracking-wide bg-amber-100 text-amber-800 px-2 py-0.5 rounded">
+          UNVERIFIED MAILBOX (RISK)
+        </span>
+      );
+    }
+
+    // 3. Válidos / Deliverable
+    if (item.detalles.mailboxConfirmed) {
+      return (
+        <span className="text-[11px] font-extrabold uppercase tracking-wide bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded">
+          ACCEPTED (PROFILE CONFIRMED)
+        </span>
+      );
+    }
     return (
-      <span className="text-[11px] font-extrabold uppercase tracking-wide bg-rose-100 text-rose-700 px-2 py-0.5 rounded">
-        INVALID SYNTAX
+      <span className="text-[11px] font-extrabold uppercase tracking-wide bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded">
+        ACCEPTED EMAIL
       </span>
     );
+  };
+
+  const getExplanation = (item: SingleRequestItem) => {
+    if (item.detalles.providerRulesPass === false) {
+      return `Rechazado por regla del proveedor: ${item.detalles.providerReason || 'Formato de cuenta no permitido.'} Este buzón no puede existir.`;
+    }
+    if (item.detalles.suspiciousPattern) {
+      return `Patrón sospechoso o cuenta no real: ${item.detalles.patternReason || 'Secuencia de teclado o prueba detectada.'} Alto riesgo de rebote inmediato.`;
+    }
+    if (item.detalles.desechable) {
+      return 'El dominio proviene de un servicio de correo temporal o desechable bloqueado. Los mensajes enviados aquí serán destruidos o rebotados.';
+    }
+    if (!item.detalles.mx) {
+      return `El dominio "${item.dominio}" no tiene servidores MX activos o no existe en DNS. No se puede entregar ningún correo.`;
+    }
+    if (!item.detalles.sintaxis) {
+      return `Sintaxis RFC inválida: ${item.detalles.error_sintaxis || 'Estructura de correo no admitida.'}`;
+    }
+    if (item.detalles.es_rol) {
+      return 'La dirección pertenece a una cuenta de rol o departamental (info, ventas, soporte, admin). Puede tener menor tasa de apertura o llegar a bandejas compartidas.';
+    }
+    if (item.detalles.isCatchAll) {
+      return 'El servidor de correo está en modo "Catch-All" (acepta cualquier dirección entrante sin validar si el buzón individual existe). Conlleva riesgo medio de rebote.';
+    }
+    if (item.detalles.reasonCode === 'UNVERIFIED_MAILBOX' || item.score_confianza < 75) {
+      return `Los servidores MX de ${item.dominio} están activos y autenticados (SPF/DMARC ok), pero este buzón específico no cuenta con perfil público verificado. Si la dirección fue inventada o adivinada, existe riesgo de rebote.`;
+    }
+    return 'Puedes enviar correos a esta dirección con total seguridad. Confirmamos que el dominio, los servidores de correo y la autenticación técnica están activos y entregables.';
   };
 
   return (
@@ -144,7 +227,7 @@ export const SingleEmailView: React.FC = () => {
           Verify single email
         </h1>
         <p className="text-xs text-slate-500 mt-1">
-          Comprueba la entregabilidad, servidor MX, autenticación SPF/DMARC y score de confianza en tiempo real.
+          Comprueba la entregabilidad, servidor MX, autenticación SPF/DMARC, reglas de proveedor y score de confianza en tiempo real.
         </p>
       </div>
 
@@ -241,7 +324,7 @@ export const SingleEmailView: React.FC = () => {
                 <div className="space-y-1.5 text-xs text-slate-700">
                   <div className="flex items-center gap-4">
                     <span className="w-16 font-semibold text-slate-500">Status</span>
-                    {getStatusBadge(item.estado)}
+                    {getStatusBadge(item)}
                     <span className="font-mono text-slate-400 text-[11px] ml-2">
                       Score: <strong className="text-slate-800">{item.score_confianza}/100</strong>
                     </span>
@@ -255,11 +338,7 @@ export const SingleEmailView: React.FC = () => {
 
                 {/* Explanation text paragraph */}
                 <p className="text-xs text-slate-600 leading-relaxed bg-slate-50/70 p-3 rounded-xl border border-slate-100">
-                  {item.estado === 'VALIDO'
-                    ? 'You can safely send emails to this address, we have confirmation that the domain and mail servers are active and deliverable.'
-                    : item.estado === 'GENERICO_ROL'
-                    ? 'The email address is a departmental or role account (info, sales, admin). Depending on your reputation score, you might decide to send or not emails to this address.'
-                    : 'The email address comes from an invalid, non-existent, or disposable domain. Delivering emails here may negatively impact your sender score.'}
+                  {getExplanation(item)}
                 </p>
 
                 {/* 3 Detail Cards (Domain, Account, Provider) */}
@@ -274,7 +353,7 @@ export const SingleEmailView: React.FC = () => {
                     <div className="flex justify-between text-slate-600">
                       <span className="text-slate-400">accept all:</span>
                       <span className="font-medium text-slate-800">
-                        {item.estado === 'VALIDO' ? 'yes' : 'no'}
+                        {item.detalles.isCatchAll ? 'yes (catch-all)' : 'no'}
                       </span>
                     </div>
                     <div className="flex justify-between text-slate-600">
@@ -301,12 +380,16 @@ export const SingleEmailView: React.FC = () => {
                       </span>
                     </div>
                     <div className="flex justify-between text-slate-600">
-                      <span className="text-slate-400">disabled:</span>
-                      <span className="font-medium text-slate-800">unknown</span>
+                      <span className="text-slate-400">pattern:</span>
+                      <span className={`font-medium ${item.detalles.suspiciousPattern ? 'text-rose-600 font-bold' : 'text-slate-800'}`}>
+                        {item.detalles.suspiciousPattern ? 'suspicious' : 'clean'}
+                      </span>
                     </div>
                     <div className="flex justify-between text-slate-600">
-                      <span className="text-slate-400">full mailbox:</span>
-                      <span className="font-medium text-slate-800">unknown</span>
+                      <span className="text-slate-400">mailbox:</span>
+                      <span className={`font-medium ${item.detalles.mailboxConfirmed ? 'text-emerald-600 font-bold' : item.detalles.providerRulesPass === false ? 'text-rose-600 font-bold' : 'text-slate-800'}`}>
+                        {item.detalles.mailboxConfirmed ? 'confirmed' : item.detalles.providerRulesPass === false ? 'rejected' : item.estado === 'INVALIDO' ? 'invalid' : 'unverified'}
+                      </span>
                     </div>
                   </div>
 
@@ -321,13 +404,19 @@ export const SingleEmailView: React.FC = () => {
                     </div>
                     <div className="flex justify-between text-slate-600">
                       <span className="text-slate-400">mx server:</span>
-                      <span className="font-medium text-slate-800">
+                      <span className={`font-medium ${item.detalles.mx ? 'text-slate-800' : 'text-rose-600 font-bold'}`}>
                         {item.detalles.mx ? 'active' : 'none'}
                       </span>
                     </div>
                     <div className="flex justify-between text-slate-600">
+                      <span className="text-slate-400">auth:</span>
+                      <span className="font-medium text-slate-800">
+                        {(item.detalles.spf ? 'SPF✓ ' : '') + (item.detalles.dmarc ? 'DMARC✓' : '') || 'none'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-slate-600">
                       <span className="text-slate-400">source:</span>
-                      <span className="font-medium text-slate-800 truncate max-w-[110px]">
+                      <span className="font-medium text-slate-800 truncate max-w-[110px]" title={item.fuente_verificacion}>
                         {item.fuente_verificacion}
                       </span>
                     </div>

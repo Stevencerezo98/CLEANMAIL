@@ -12,6 +12,10 @@ import { correctEmailTypo } from '../utils/typoCorrector.ts';
 import { isDisposableDomain } from '../utils/disposableCheck.ts';
 import { isRoleAccount, determineEmailType } from '../utils/roleDetector.ts';
 import { verifyDomainMx } from '../utils/dnsValidator.ts';
+import {
+  validateProviderSpecificRules,
+  detectSuspiciousPatterns,
+} from '../utils/mailboxValidator.ts';
 import { ExternalValidatorService } from './externalValidator.service.ts';
 
 export class EmailService {
@@ -109,9 +113,49 @@ export class EmailService {
               observacion: 'Dominio temporal / desechable bloqueado (anti-spam)',
               mx_valido: false,
               corregido: wasCorrected,
-              score_confianza: 5,
+              score_confianza: 0,
               verificado_externo: false,
               fuente_verificacion: 'Lista Negra Local',
+            });
+            return;
+          }
+
+          // 4.1 Validación de reglas de proveedor (ej. Gmail < 6 letras o números exclusivos)
+          const providerRule = validateProviderSpecificRules(localPart, domain);
+          if (!providerRule.pass) {
+            toInsert.push({
+              categoria_id,
+              email: normalizedEmail,
+              original_email: trimmedRaw,
+              estado: 'INVALIDO',
+              tipo: 'Personal',
+              dominio: domain,
+              observacion: `Rechazado por proveedor (${domain}): ${providerRule.reason}`,
+              mx_valido: false,
+              corregido: wasCorrected,
+              score_confianza: 0,
+              verificado_externo: false,
+              fuente_verificacion: `Reglas Proveedor (${domain})`,
+            });
+            return;
+          }
+
+          // 4.2 Detección de patrones de prueba, secuencias y teclado
+          const patternCheck = detectSuspiciousPatterns(localPart);
+          if (patternCheck.isSuspicious) {
+            toInsert.push({
+              categoria_id,
+              email: normalizedEmail,
+              original_email: trimmedRaw,
+              estado: 'INVALIDO',
+              tipo: 'Personal',
+              dominio: domain,
+              observacion: `Patrón sospechoso o ficticio: ${patternCheck.reason}`,
+              mx_valido: false,
+              corregido: wasCorrected,
+              score_confianza: 10,
+              verificado_externo: false,
+              fuente_verificacion: 'Filtro Anti-Fraude Local',
             });
             return;
           }
@@ -146,7 +190,7 @@ export class EmailService {
           }
 
           // 7. Puntuación de Confianza Adicional (Evaluación Externa Opcional)
-          let scoreConfianza = estado === 'VALIDO' ? 90 : estado === 'GENERICO_ROL' ? 65 : 10;
+          let scoreConfianza = estado === 'VALIDO' ? 85 : estado === 'GENERICO_ROL' ? 55 : 10;
           let verificadoExterno = false;
           let fuenteVerificacion = 'Local';
 
@@ -170,9 +214,11 @@ export class EmailService {
                 observacion += ` | ${extRes.details}`;
               }
 
-              // Si la API externa determinó que es desechable
-              if (extRes.score <= 10 && estado === 'VALIDO') {
+              // Sincronizar estado real según el resultado externo
+              if ((extRes.score < 35 || !extRes.isDeliverable) && estado === 'VALIDO') {
                 estado = 'INVALIDO';
+              } else if (extRes.reasonCode === 'UNVERIFIED_MAILBOX' && estado === 'VALIDO') {
+                estado = 'GENERICO_ROL';
               }
             } catch (err) {
               console.warn('Fallo en verificación externa para:', normalizedEmail, err);
@@ -315,27 +361,11 @@ export class EmailService {
       mxResult = await verifyDomainMx(domain);
     }
 
-    let estado: EstadoEmail = 'VALIDO';
-    let observacion = 'Sintaxis válida y servidor de correo activo.';
+    // Reglas de sintaxis específicas del proveedor y análisis anti-fraude
+    const providerRule = validateProviderSpecificRules(localPart, domain);
+    const patternCheck = detectSuspiciousPatterns(localPart);
 
-    if (isDisposable) {
-      estado = 'INVALIDO';
-      observacion = 'Dominio de correo temporal o desechable.';
-    } else if (!mxResult.hasMx) {
-      estado = 'INVALIDO';
-      observacion = `Servidores MX inactivos: ${mxResult.observation}`;
-    } else if (isRole) {
-      estado = 'GENERICO_ROL';
-      observacion = `Cuenta de rol o genérica (${localPart}@). ${mxResult.observation}`;
-    } else {
-      observacion = `${mxResult.observation}`;
-    }
-
-    if (typoRes.hasTypo) {
-      observacion = `${typoRes.observation}. ${observacion}`;
-    }
-
-    // Evaluación Externa
+    // Evaluación Externa y reputacional
     const extOptionsToUse: ExternalVerifyOptions = externalOptions || { enabled: true, provider: 'debounce' };
     const extEval = await ExternalValidatorService.evaluateConfidenceScore(
       targetEmail,
@@ -346,6 +376,40 @@ export class EmailService {
       syntaxRes.isValid,
       extOptionsToUse
     );
+
+    let estado: EstadoEmail = 'VALIDO';
+    let observacion = '';
+
+    if (isDisposable) {
+      estado = 'INVALIDO';
+      observacion = 'Dominio de correo temporal o desechable bloqueado.';
+    } else if (!mxResult.hasMx) {
+      estado = 'INVALIDO';
+      observacion = `Servidores MX inactivos: ${mxResult.observation}`;
+    } else if (!providerRule.pass) {
+      estado = 'INVALIDO';
+      observacion = `Rechazado por regla del proveedor (${domain}): ${providerRule.reason}`;
+    } else if (patternCheck.isSuspicious) {
+      estado = 'INVALIDO';
+      observacion = `Patrón sospechoso o de prueba: ${patternCheck.reason}`;
+    } else if (isRole || extEval.reasonCode === 'ROLE_ACCOUNT') {
+      estado = 'GENERICO_ROL';
+      observacion = `Cuenta de rol o departamental (${localPart}@). ${extEval.details}`;
+    } else if (extEval.reasonCode === 'UNVERIFIED_MAILBOX' || extEval.isCatchAll) {
+      // Estado de riesgo (Buzón no confirmado en proveedor sin perfil o servidor Catch-All)
+      estado = 'GENERICO_ROL';
+      observacion = extEval.details;
+    } else if (!extEval.isDeliverable || extEval.score < 35 || extEval.reasonCode.startsWith('UNDELIVERABLE')) {
+      estado = 'INVALIDO';
+      observacion = `No entregable: ${extEval.details}`;
+    } else {
+      estado = 'VALIDO';
+      observacion = extEval.details || 'Buzón activo verificado y servidores de correo operativos.';
+    }
+
+    if (typoRes.hasTypo) {
+      observacion = `${typoRes.observation}. ${observacion}`;
+    }
 
     return {
       email: targetEmail,
@@ -358,7 +422,7 @@ export class EmailService {
       score_confianza: extEval.score,
       verificado_externo: true,
       fuente_verificacion: extEval.provider,
-      observacion: `${observacion} [Score: ${extEval.score}/100 - ${extEval.details}]`,
+      observacion: `${observacion} [Score: ${extEval.score}/100]`,
       detalles: {
         sintaxis: true,
         desechable: isDisposable,
@@ -369,6 +433,13 @@ export class EmailService {
         provider: extEval.provider,
         spf: extEval.spfPresent,
         dmarc: extEval.dmarcPresent,
+        reasonCode: extEval.reasonCode,
+        isCatchAll: Boolean(extEval.isCatchAll),
+        mailboxConfirmed: Boolean(extEval.profileFound),
+        providerRulesPass: providerRule.pass,
+        providerReason: providerRule.reason,
+        suspiciousPattern: patternCheck.isSuspicious,
+        patternReason: patternCheck.reason,
       },
     };
   }
