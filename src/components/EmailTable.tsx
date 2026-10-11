@@ -59,12 +59,41 @@ export const EmailTable: React.FC<EmailTableProps> = ({
   const [includeRolesInExport, setIncludeRolesInExport] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
 
+  // Descarga nativa Excel multi-hoja sin mezclas
+  const handleDownloadXlsx = async () => {
+    if (!category) return;
+    setIsExporting(true);
+    try {
+      const url = `/api/emails/export-xlsx/${category.id}?scope=separated`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error('Error al generar la descarga del archivo Excel.');
+      }
+
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      const safeName = category.nombre.replace(/[^a-zA-Z0-9_-]/g, '_');
+      a.download = `CleanMail_${safeName}_MultiHoja_${Date.now()}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(downloadUrl);
+      document.body.removeChild(a);
+    } catch (err) {
+      console.error('Export error:', err);
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   // Endpoint 5: GET /api/emails/export/:id
   const handleExportCsv = async () => {
     if (!category) return;
     setIsExporting(true);
     try {
-      const url = `/api/emails/export/${category.id}?include_roles=${includeRolesInExport}`;
+      const scope = includeRolesInExport ? 'validos_y_roles' : 'validos';
+      const url = `/api/emails/export/${category.id}?scope=${scope}&delimiter=;`;
       const response = await fetch(url);
       if (!response.ok) {
         throw new Error('Error al generar la descarga del archivo CSV.');
@@ -75,7 +104,7 @@ export const EmailTable: React.FC<EmailTableProps> = ({
       const a = document.createElement('a');
       a.href = downloadUrl;
       const safeName = category.nombre.replace(/[^a-zA-Z0-9_-]/g, '_');
-      a.download = `Emails_Limpios_${safeName}_${Date.now()}.csv`;
+      a.download = `CleanMail_${safeName}_${Date.now()}.csv`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(downloadUrl);
@@ -236,12 +265,22 @@ export const EmailTable: React.FC<EmailTableProps> = ({
           </label>
 
           <button
+            onClick={handleDownloadXlsx}
+            disabled={isExporting || total === 0}
+            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 text-white text-xs font-bold shadow-md shadow-emerald-700/20 transition cursor-pointer"
+            title="Descargar libro de Excel con hojas separadas para Válidos, Rol e Inválidos (¡Cero mezclas!)"
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" />
+            <span>{isExporting ? 'Generando...' : 'Descargar Excel (.xlsx)'}</span>
+          </button>
+
+          <button
             onClick={handleExportCsv}
             disabled={isExporting || total === 0}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:opacity-50 text-white text-xs font-bold shadow-md shadow-emerald-700/20 transition"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 text-xs font-semibold transition cursor-pointer"
           >
             <Download className="w-3.5 h-3.5" />
-            <span>{isExporting ? 'Generando CSV...' : 'Exportar CSV Limpio'}</span>
+            <span>CSV</span>
           </button>
         </div>
       </div>

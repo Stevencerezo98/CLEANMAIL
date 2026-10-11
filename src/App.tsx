@@ -51,7 +51,7 @@ export default function App() {
   const [totalRecords, setTotalRecords] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [page, setPage] = useState(1);
-  const [limit] = useState(50);
+  const [limit, setLimit] = useState(50);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<EstadoEmail | 'TODOS'>('TODOS');
   const [typeFilter, setTypeFilter] = useState<TipoEmail | 'TODOS'>('TODOS');
@@ -330,6 +330,68 @@ export default function App() {
     fetchCategories();
   };
 
+  // Vaciar todos los correos de una categoría (sin eliminar la categoría)
+  const handleEmptyCategory = async (targetCatId: string) => {
+    if (!targetCatId) return;
+    try {
+      if (selectedCategoryId === targetCatId) {
+        setCorreos([]);
+        setTotalRecords(0);
+      }
+      const res = await fetch('/api/emails/bulk-delete-filter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ categoria_id: targetCatId, filter: 'ALL' }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Error al vaciar la lista.');
+      }
+      if (selectedCategoryId === targetCatId) {
+        fetchEmails(targetCatId);
+      }
+      fetchCategories();
+      fetchGlobalStats();
+    } catch (err) {
+      console.error('Error al vaciar categoría:', err);
+      fetchEmails();
+      throw err;
+    }
+  };
+
+  // Eliminación masiva por filtro activo (ej: todos los filtrados en la búsqueda o estado)
+  const handleDeleteByFilter = async (
+    targetCatId: string,
+    filter: 'INVALIDOS' | 'GENERICOS_ROL' | 'VALIDOS' | 'ALL' | 'FILTERED',
+    options?: any
+  ) => {
+    if (!targetCatId) return;
+    try {
+      const res = await fetch('/api/emails/bulk-delete-filter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ categoria_id: targetCatId, filter, options }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Error en eliminación filtrada.');
+      }
+      fetchEmails(targetCatId);
+      fetchCategories();
+      fetchGlobalStats();
+    } catch (err) {
+      console.error('Error en eliminación por filtro:', err);
+      fetchEmails();
+      throw err;
+    }
+  };
+
+  // Cambio de límite de registros por página
+  const handleLimitChange = (newLimit: number) => {
+    setLimit(newLimit);
+    setPage(1);
+  };
+
   // Purgar todos los inválidos de la categoría activa
   const handlePurgeInvalid = async () => {
     const targetCat = selectedCategoryId || (categories.length > 0 ? categories[0].id : '');
@@ -448,8 +510,8 @@ export default function App() {
   }
 
   const totalAllEmails = categories.reduce((acc, c) => acc + (c.total_correos || 0), 0);
-  const activePlanName = systemConfig?.planName || 'Plan Enterprise CleanMail';
-  const availableCredits = systemConfig?.creditosDisponibles || 100000;
+  const activePlanName = systemConfig?.planName || 'Plan Inicial';
+  const availableCredits = systemConfig?.creditosDisponibles ?? 0;
 
   return (
     <div className="flex min-h-screen bg-[#f3f6f9] text-slate-800 antialiased font-sans">
@@ -563,14 +625,27 @@ export default function App() {
                 setPage(1);
               }}
               onPageChange={(p) => setPage(p)}
+              onLimitChange={handleLimitChange}
               onDeleteEmail={handleDeleteEmail}
               onBulkDelete={handleBulkDelete}
               onBulkMove={handleBulkMove}
               onPurgeInvalid={handlePurgeInvalid}
+              onEmptyCategory={handleEmptyCategory}
+              onDeleteByFilter={handleDeleteByFilter}
               onMoveRolesToNewList={handleMoveRolesToNewList}
               onEditEmail={handleEditEmail}
               onUploadSuccess={handleUploadSuccess}
               loading={loadingEmails}
+              systemConfig={systemConfig}
+              onPlanUpgraded={(newCfg) => {
+                setSystemConfig(newCfg);
+                fetchGlobalStats();
+              }}
+              onReauditSuccess={() => {
+                fetchCategories();
+                fetchEmails();
+                fetchGlobalStats();
+              }}
             />
           )}
 
@@ -594,6 +669,7 @@ export default function App() {
               onCreateCategory={handleCreateCategory}
               onUpdateCategory={handleUpdateCategory}
               onDeleteCategory={handleDeleteCategory}
+              onEmptyCategory={handleEmptyCategory}
               onGoToVerifyList={() => setActiveTab('list')}
             />
           )}

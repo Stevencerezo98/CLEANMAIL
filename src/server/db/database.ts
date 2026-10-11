@@ -473,14 +473,52 @@ class Database {
     return deletedCount;
   }
 
-  // Eliminación por filtro en categoría (ej: purgar todos los inválidos)
-  public deleteEmailsByFilter(categoria_id: string, filter: 'INVALIDOS' | 'GENERICOS_ROL' | 'ALL'): number {
+  // Eliminación por filtro en categoría (ej: purgar todos los inválidos, vaciar lista o por filtros)
+  public deleteEmailsByFilter(
+    categoria_id: string,
+    filter: 'INVALIDOS' | 'GENERICOS_ROL' | 'VALIDOS' | 'ALL' | 'FILTERED',
+    options?: {
+      search?: string;
+      estado?: string;
+      tipo?: string;
+      min_score?: number;
+      max_score?: number;
+    }
+  ): number {
     const initialCount = this.data.correos.length;
     this.data.correos = this.data.correos.filter((c) => {
       if (c.categoria_id !== categoria_id) return true;
       if (filter === 'ALL') return false;
       if (filter === 'INVALIDOS' && c.estado === 'INVALIDO') return false;
       if (filter === 'GENERICOS_ROL' && c.estado === 'GENERICO_ROL') return false;
+      if (filter === 'VALIDOS' && c.estado === 'VALIDO') return false;
+
+      if (filter === 'FILTERED' && options) {
+        let match = true;
+        if (options.estado && options.estado !== 'TODOS' && c.estado !== options.estado) {
+          match = false;
+        }
+        if (options.tipo && options.tipo !== 'TODOS' && c.tipo !== options.tipo) {
+          match = false;
+        }
+        if (options.min_score !== undefined && (c.score_confianza ?? 0) < options.min_score) {
+          match = false;
+        }
+        if (options.max_score !== undefined && (c.score_confianza ?? 0) > options.max_score) {
+          match = false;
+        }
+        if (options.search && options.search.trim()) {
+          const q = options.search.toLowerCase().trim();
+          const matchesSearch =
+            c.email.toLowerCase().includes(q) ||
+            c.dominio.toLowerCase().includes(q) ||
+            c.observacion.toLowerCase().includes(q) ||
+            (c.fuente_verificacion && c.fuente_verificacion.toLowerCase().includes(q));
+          if (!matchesSearch) match = false;
+        }
+        if (match) return false; // descartar / eliminar este registro
+      }
+
       return true;
     });
     const deletedCount = initialCount - this.data.correos.length;

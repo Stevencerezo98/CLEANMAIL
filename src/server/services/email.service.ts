@@ -1,4 +1,5 @@
 import { db } from '../db/database.ts';
+import * as xlsx from 'xlsx';
 import {
   Correo,
   EstadoEmail,
@@ -220,27 +221,22 @@ export class EmailService {
             // Sincronizar estado real estricto según la evaluación
             if (isRole || extRes.reasonCode === 'ROLE_ACCOUNT') {
               estado = 'GENERICO_ROL';
-            } else if (extRes.reasonCode === 'UNVERIFIED_MAILBOX' || extRes.isCatchAll) {
-              // Buzón no confirmado en proveedor gratuito sin perfil ni nombre orgánico o servidor catch-all
-              estado = 'GENERICO_ROL';
-            } else if (!extRes.isDeliverable || extRes.score < 40) {
+            } else if (!mxValido || !extRes.isDeliverable || extRes.score < 40 || extRes.reasonCode === 'DISPOSABLE' || extRes.reasonCode === 'NO_MX') {
               estado = 'INVALIDO';
-            } else if (extRes.isDeliverable && extRes.score >= 75) {
-              estado = 'VALIDO';
             } else {
-              estado = 'GENERICO_ROL';
+              estado = 'VALIDO';
             }
           } catch (err) {
             console.warn('Fallo en verificación reputacional para:', normalizedEmail, err);
             if (isRole) {
               estado = 'GENERICO_ROL';
-              scoreConfianza = 55;
+              scoreConfianza = 65;
             } else if (!mxValido) {
               estado = 'INVALIDO';
               scoreConfianza = 0;
             } else {
               estado = 'VALIDO';
-              scoreConfianza = 80;
+              scoreConfianza = 90;
             }
           }
 
@@ -296,12 +292,29 @@ export class EmailService {
   }
 
   /**
-   * Genera el contenido CSV exportable para una categoría incluyendo Score de Confianza
+   * Genera el contenido CSV exportable para una categoría.
+   * Limpia saltos de línea internos, escapa comillas correctamente e incluye sep=;
+   * para que Microsoft Excel abra cada columna separada sin juntar nada.
    */
-  public static generateExportCsv(categoria_id: string, includeRoles = true): string {
-    const emails = db.getCleanEmailsForExport(categoria_id, includeRoles);
+  public static generateExportCsv(
+    categoria_id: string,
+    scope: 'validos' | 'roles' | 'invalidos' | 'validos_y_roles' | 'all' = 'validos',
+    delimiter: ';' | ',' = ';'
+  ): string {
+    const allEmails = db.getEmailsByCategory(categoria_id, { limit: 100000 }).correos;
     const category = db.getCategoryById(categoria_id);
     const catName = category ? category.nombre : 'Sin_Categoria';
+
+    let filtered = allEmails;
+    if (scope === 'validos') {
+      filtered = allEmails.filter((e) => e.estado === 'VALIDO');
+    } else if (scope === 'roles') {
+      filtered = allEmails.filter((e) => e.estado === 'GENERICO_ROL');
+    } else if (scope === 'invalidos') {
+      filtered = allEmails.filter((e) => e.estado === 'INVALIDO');
+    } else if (scope === 'validos_y_roles') {
+      filtered = allEmails.filter((e) => e.estado === 'VALIDO' || e.estado === 'GENERICO_ROL');
+    }
 
     const headers = [
       'Email',
@@ -312,26 +325,192 @@ export class EmailService {
       'Verificacion_Externa',
       'Fuente_Verificacion',
       'Dominio',
+      'Servidor_MX',
       'Observacion',
       'Categoria',
       'Fecha_Registro',
     ];
 
-    const rows = emails.map((e) => [
-      `"${e.email}"`,
-      `"${e.original_email}"`,
-      `"${e.estado}"`,
-      `"${e.tipo}"`,
-      `"${e.score_confianza ?? 0}"`,
-      `"${e.verificado_externo ? 'SI' : 'NO'}"`,
-      `"${e.fuente_verificacion || 'Local'}"`,
-      `"${e.dominio}"`,
-      `"${e.observacion.replace(/"/g, '""')}"`,
-      `"${catName}"`,
-      `"${e.fecha_creacion}"`,
+    const cleanField = (val: string | number | boolean | undefined | null) => {
+      if (val === undefined || val === null) return '""';
+      const str = String(val).replace(/[\r\n]+/g, ' ').replace(/"/g, '""');
+      return `"${str}"`;
+    };
+
+    const rows = filtered.map((e) => [
+      cleanField(e.email),
+      cleanField(e.original_email),
+      cleanField(e.estado === 'VALIDO' ? 'Válido' : e.estado === 'GENERICO_ROL' ? 'De Rol' : 'Inválido'),
+      cleanField(e.tipo),
+      cleanField(e.score_confianza ?? 0),
+      cleanField(e.verificado_externo ? 'SI' : 'NO'),
+      cleanField(e.fuente_verificacion || 'Local'),
+      cleanField(e.dominio),
+      cleanField(e.mx_valido ? 'Activo' : 'Inactivo'),
+      cleanField(e.observacion),
+      cleanField(catName),
+      cleanField(e.fecha_creacion),
     ]);
 
-    return [headers.join(','), ...rows.map((r) => r.join(','))].join('\r\n');
+    // Instrucción explícita sep= para que Excel reconozca el delimitador de inmediato
+    const sepHeader = `sep=${delimiter}`;
+    const headerLine = headers.join(delimiter);
+    const dataLines = rows.map((r) => r.join(delimiter));
+
+    return [sepHeader, headerLine, ...dataLines].join('\r\n');
+  }
+
+  /**
+   * Genera un archivo nativo de Microsoft Excel (.xlsx) estructurado en hojas independientes
+   * (Pestaña 1: Válidos, Pestaña 2: Cuentas de Rol, Pestaña 3: Inválidos, Pestaña 4: Resumen)
+   * garantizando que los datos NUNCA salgan hechos una mezcla.
+   */
+  public static generateExportXlsxBuffer(
+    categoria_id: string,
+    scope: 'separated' | 'validos' | 'roles' | 'invalidos' | 'all' = 'separated'
+  ): Buffer {
+    const allEmails = db.getEmailsByCategory(categoria_id, { limit: 100000 }).correos;
+    const category = db.getCategoryById(categoria_id);
+    const catName = category ? category.nombre : 'Sin_Categoria';
+
+    const workbook = xlsx.utils.book_new();
+
+    const columnWidths = [
+      { wch: 32 }, // Correo Electrónico
+      { wch: 32 }, // Correo Original
+      { wch: 22 }, // Estado
+      { wch: 18 }, // Tipo de Cuenta
+      { wch: 18 }, // Score de Confianza
+      { wch: 20 }, // Verificación Externa
+      { wch: 22 }, // Fuente
+      { wch: 22 }, // Dominio
+      { wch: 16 }, // Servidor MX
+      { wch: 60 }, // Diagnóstico / Observación
+      { wch: 22 }, // Categoría
+      { wch: 24 }, // Fecha
+    ];
+
+    const mapEmailRow = (e: Correo) => ({
+      'Correo Electrónico': e.email,
+      'Correo Original': e.original_email,
+      'Estado': e.estado === 'VALIDO' ? 'Válido (Entregable)' : e.estado === 'GENERICO_ROL' ? 'Riesgoso (Rol)' : 'Inválido (Rebotado)',
+      'Tipo de Cuenta': e.tipo === 'De_Rol' ? 'Cuenta de Rol' : e.tipo,
+      'Score de Confianza': e.score_confianza ?? 0,
+      'Verificación Externa': e.verificado_externo ? 'SÍ' : 'NO',
+      'Fuente de Verificación': e.fuente_verificacion || 'Local',
+      'Dominio': e.dominio,
+      'Servidor MX': e.mx_valido ? 'Activo' : 'Inactivo',
+      'Diagnóstico / Observación': (e.observacion || '').replace(/[\r\n]+/g, ' '),
+      'Lista / Categoría': catName,
+      'Fecha de Registro': e.fecha_creacion,
+    });
+
+    if (scope === 'separated') {
+      const validos = allEmails.filter((e) => e.estado === 'VALIDO');
+      const roles = allEmails.filter((e) => e.estado === 'GENERICO_ROL');
+      const invalidos = allEmails.filter((e) => e.estado === 'INVALIDO');
+
+      // 1. Hoja de Válidos (100% Limpios y Entregables)
+      const validSheet = xlsx.utils.json_to_sheet(validos.map(mapEmailRow));
+      validSheet['!cols'] = columnWidths;
+      xlsx.utils.book_append_sheet(workbook, validSheet, `Válidos (${validos.length})`);
+
+      // 2. Hoja de Cuentas de Rol / Riesgosas
+      const roleSheet = xlsx.utils.json_to_sheet(roles.map(mapEmailRow));
+      roleSheet['!cols'] = columnWidths;
+      xlsx.utils.book_append_sheet(workbook, roleSheet, `De Rol (${roles.length})`);
+
+      // 3. Hoja de Inválidos / Rebotados
+      const invalidSheet = xlsx.utils.json_to_sheet(invalidos.map(mapEmailRow));
+      invalidSheet['!cols'] = columnWidths;
+      xlsx.utils.book_append_sheet(workbook, invalidSheet, `Inválidos (${invalidos.length})`);
+
+      // 4. Hoja de Resumen de Auditoría
+      const summaryRows = [
+        { 'Métrica de Depuración': 'Nombre de la Lista / Categoría', 'Valor': catName },
+        { 'Métrica de Depuración': 'Total de Correos Procesados', 'Valor': allEmails.length },
+        { 'Métrica de Depuración': 'Correos Válidos (Deliverable)', 'Valor': validos.length },
+        { 'Métrica de Depuración': 'Cuentas de Rol / Riesgosas', 'Valor': roles.length },
+        { 'Métrica de Depuración': 'Correos Inválidos (Undeliverable)', 'Valor': invalidos.length },
+        {
+          'Métrica de Depuración': 'Tasa de Entregabilidad Estimada',
+          'Valor': allEmails.length > 0 ? `${Math.round((validos.length / allEmails.length) * 100)}%` : '0%',
+        },
+        { 'Métrica de Depuración': 'Fecha de Exportación', 'Valor': new Date().toLocaleString() },
+      ];
+      const summarySheet = xlsx.utils.json_to_sheet(summaryRows);
+      summarySheet['!cols'] = [{ wch: 35 }, { wch: 35 }];
+      xlsx.utils.book_append_sheet(workbook, summarySheet, 'Resumen de Auditoría');
+    } else {
+      let filtered = allEmails;
+      let sheetName = 'Correos Depurados';
+      if (scope === 'validos') {
+        filtered = allEmails.filter((e) => e.estado === 'VALIDO');
+        sheetName = `Solo Válidos (${filtered.length})`;
+      } else if (scope === 'roles') {
+        filtered = allEmails.filter((e) => e.estado === 'GENERICO_ROL');
+        sheetName = `Solo Rol (${filtered.length})`;
+      } else if (scope === 'invalidos') {
+        filtered = allEmails.filter((e) => e.estado === 'INVALIDO');
+        sheetName = `Solo Inválidos (${filtered.length})`;
+      }
+
+      const worksheet = xlsx.utils.json_to_sheet(filtered.map(mapEmailRow));
+      worksheet['!cols'] = columnWidths;
+      xlsx.utils.book_append_sheet(workbook, worksheet, sheetName);
+    }
+
+    const buffer = xlsx.write(workbook, { type: 'buffer', bookType: 'xlsx' });
+    return buffer as Buffer;
+  }
+
+  /**
+   * Genera un archivo TXT simple con un correo por línea para herramientas de envío
+   */
+  public static generateExportTxt(categoria_id: string, scope: 'validos' | 'roles' | 'all' = 'validos'): string {
+    const allEmails = db.getEmailsByCategory(categoria_id, { limit: 100000 }).correos;
+    let filtered = allEmails;
+    if (scope === 'validos') {
+      filtered = allEmails.filter((e) => e.estado === 'VALIDO');
+    } else if (scope === 'roles') {
+      filtered = allEmails.filter((e) => e.estado === 'GENERICO_ROL');
+    }
+    return filtered.map((e) => e.email.trim()).join('\r\n');
+  }
+
+  /**
+   * Re-evalúa y limpia una lista completa con las reglas estrictas de proveedores y anti-fraude
+   */
+  public static async reauditCategory(categoria_id: string): Promise<{
+    updatedCount: number;
+    validos: number;
+    roles: number;
+    invalidos: number;
+  }> {
+    const emails = db.getEmailsByCategory(categoria_id, { limit: 10000 }).correos;
+    let validos = 0;
+    let roles = 0;
+    let invalidos = 0;
+
+    for (const item of emails) {
+      const singleRes = await this.validateSingleEmail(item.email);
+      db.updateEmail(item.id, {
+        email: singleRes.email,
+        dominio: singleRes.dominio,
+        estado: singleRes.estado as EstadoEmail,
+        tipo: singleRes.tipo as TipoEmail,
+        mx_valido: singleRes.mx_valido,
+        score_confianza: singleRes.score_confianza,
+        observacion: singleRes.observacion,
+        corregido: singleRes.corregido,
+      });
+
+      if (singleRes.estado === 'VALIDO') validos++;
+      else if (singleRes.estado === 'GENERICO_ROL') roles++;
+      else invalidos++;
+    }
+
+    return { updatedCount: emails.length, validos, roles, invalidos };
   }
 
   /**
@@ -414,11 +593,7 @@ export class EmailService {
     } else if (isRole || extEval.reasonCode === 'ROLE_ACCOUNT') {
       estado = 'GENERICO_ROL';
       observacion = `Cuenta de rol o departamental (${localPart}@). ${extEval.details}`;
-    } else if (extEval.reasonCode === 'UNVERIFIED_MAILBOX' || extEval.isCatchAll) {
-      // Estado de riesgo (Buzón no confirmado en proveedor sin perfil o servidor Catch-All)
-      estado = 'GENERICO_ROL';
-      observacion = extEval.details;
-    } else if (!extEval.isDeliverable || extEval.score < 35 || extEval.reasonCode.startsWith('UNDELIVERABLE')) {
+    } else if (!extEval.isDeliverable || extEval.score < 40 || extEval.reasonCode.startsWith('UNDELIVERABLE')) {
       estado = 'INVALIDO';
       observacion = `No entregable: ${extEval.details}`;
     } else {
@@ -499,8 +674,18 @@ export class EmailService {
     return db.deleteEmailsBulk(ids);
   }
 
-  public static deleteEmailsByFilter(categoria_id: string, filter: 'INVALIDOS' | 'GENERICOS_ROL' | 'ALL'): number {
-    return db.deleteEmailsByFilter(categoria_id, filter);
+  public static deleteEmailsByFilter(
+    categoria_id: string,
+    filter: 'INVALIDOS' | 'GENERICOS_ROL' | 'VALIDOS' | 'ALL' | 'FILTERED',
+    options?: {
+      search?: string;
+      estado?: string;
+      tipo?: string;
+      min_score?: number;
+      max_score?: number;
+    }
+  ): number {
+    return db.deleteEmailsByFilter(categoria_id, filter, options);
   }
 
   public static moveEmailsBulk(ids: string[], target_categoria_id: string): number {

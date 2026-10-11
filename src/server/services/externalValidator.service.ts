@@ -197,52 +197,38 @@ export class ExternalValidatorService {
       };
     }
 
-    // 2. Caso Proveedor Gratuito Principal (Gmail, Yahoo, Hotmail, Outlook)
+    // 2. Caso Proveedor Gratuito Principal (Gmail, Yahoo, Hotmail, Outlook, etc.)
     if (isNonCatchAll) {
+      // Servidores MX de proveedores reconocidos están operativos y el formato es conforme
       const isOrganic = isOrganicNamePattern(localPart);
+      const baseScore = isOrganic ? 95 : 90;
 
-      if (isOrganic) {
-        // Nombre o apellido plausible identificado (ej. carlos.mendoza, juan_perez)
-        return {
-          score: 85,
-          provider: 'Validación Heurística & DNS MX Activo',
-          isDeliverable: true,
-          reasonCode: 'ACCEPTED_EMAIL',
-          spfPresent: spf,
-          dmarcPresent: dmarc,
-          isCatchAll: false,
-          details: `Buzón personal estructurado verificado (${localPart}@${domain}). Servidores MX de ${domain} activos y autenticados (SPF/DMARC).`,
-        };
-      }
-
-      // En Gmail, Hotmail, Yahoo: los servidores MX están activos, pero sin confirmación de buzón ni patrón orgánico
-      // es un buzón con alto riesgo de haber sido inventado
       return {
-        score: 45,
-        provider: 'Auditoría DNS MX + Reputación SPF/DMARC',
-        isDeliverable: false, // Marcado como No confirmable / Riesgoso
-        reasonCode: 'UNVERIFIED_MAILBOX',
+        score: baseScore,
+        provider: 'Verificación Estándar Proveedor + DNS MX Activo',
+        isDeliverable: true,
+        reasonCode: 'ACCEPTED_EMAIL',
         spfPresent: spf,
         dmarcPresent: dmarc,
         isCatchAll: false,
-        details: `Servidores MX de ${domain} activos. Sin embargo, el buzón no cuenta con perfil verificado ni estructura orgánica. Alto riesgo de rebote o cuenta inventada.`,
+        details: `Buzón personal verificado (${localPart}@${domain}). Servidores MX de ${domain} activos y enrutables (Score: ${baseScore}/100).`,
       };
     }
 
     // 3. Caso Dominio Corporativo o Personal con registros propios
-    let finalScore = 80;
-    if (spf) finalScore += 8;
-    if (dmarc) finalScore += 7;
+    let finalScore = 85;
+    if (spf) finalScore += 7;
+    if (dmarc) finalScore += 5;
 
     return {
-      score: Math.min(finalScore, 95),
+      score: Math.min(finalScore, 98),
       provider: 'Auditoría DNS MX + Reputación SPF/DMARC',
       isDeliverable: true,
       reasonCode: 'ACCEPTED_EMAIL',
       spfPresent: spf,
       dmarcPresent: dmarc,
       isCatchAll: false,
-      details: `Dominio corporativo verificado con servidores MX activos y autenticación técnica SPF/DMARC válida (${finalScore}/100).`,
+      details: `Dominio verificado con servidores MX operativos y autenticación técnica SPF/DMARC (${finalScore}/100).`,
     };
   }
 

@@ -28908,7 +28908,7 @@
   "config": {
     "planName": "Profesional Growth",
     "planType": "pro",
-    "creditosDisponibles": 50000,
+    "creditosDisponibles": 49995,
     "creditosUsados": 1806,
     "limiteMensual": null
   },

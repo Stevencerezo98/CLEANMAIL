@@ -14,8 +14,17 @@ router.post(
 // Endpoint: GET /api/emails/category/:id - Obtener correos filtrados por categoría
 router.get('/category/:id', EmailController.getByCategory);
 
-// Endpoint: GET /api/emails/export/:id - Exportar la lista limpia a CSV
+// Endpoint: GET /api/emails/export/:id - Exportar la lista limpia a CSV (delimitador ;)
 router.get('/export/:id', EmailController.exportCleanCsv);
+
+// Endpoint: GET /api/emails/export-xlsx/:id - Exportar la lista limpia a formato nativo Excel (.xlsx)
+router.get('/export-xlsx/:id', EmailController.exportCleanXlsx);
+
+// Endpoint: GET /api/emails/export-txt/:id - Exportar lista de correos en texto plano (uno por línea)
+router.get('/export-txt/:id', EmailController.exportCleanTxt);
+
+// Endpoint: POST /api/emails/reaudit-category/:id - Re-auditar categoría completa con reglas anti-fraude
+router.post('/reaudit-category/:id', EmailController.reauditCategory);
 
 // Validación en vivo de un correo individual
 router.post('/validate-single', EmailController.validateSingle);

@@ -11,6 +11,7 @@ interface CategoriesViewProps {
   onCreateCategory: (nombre: string) => Promise<void>;
   onUpdateCategory: (id: string, nombre: string, descripcion?: string) => Promise<void>;
   onDeleteCategory: (id: string) => Promise<void>;
+  onEmptyCategory?: (id: string) => Promise<void>;
   onGoToVerifyList: () => void;
 }
 
@@ -21,6 +22,7 @@ export const CategoriesView: React.FC<CategoriesViewProps> = ({
   onCreateCategory,
   onUpdateCategory,
   onDeleteCategory,
+  onEmptyCategory,
   onGoToVerifyList,
 }) => {
   const [newCatName, setNewCatName] = useState('');
@@ -28,7 +30,9 @@ export const CategoriesView: React.FC<CategoriesViewProps> = ({
   const [errorMsg, setErrorMsg] = useState('');
   const [editingCat, setEditingCat] = useState<Categoria | null>(null);
   const [catToDelete, setCatToDelete] = useState<Categoria | null>(null);
+  const [catToEmpty, setCatToEmpty] = useState<Categoria | null>(null);
   const [isDeletingCat, setIsDeletingCat] = useState(false);
+  const [isEmptyingCat, setIsEmptyingCat] = useState(false);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -115,13 +119,23 @@ export const CategoriesView: React.FC<CategoriesViewProps> = ({
                       <Edit className="w-4 h-4" />
                     </button>
 
+                    {(cat.total_correos || 0) > 0 && onEmptyCategory && (
+                      <button
+                        onClick={() => setCatToEmpty(cat)}
+                        className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition cursor-pointer"
+                        title={`Vaciar todos los ${cat.total_correos} correos de esta lista`}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+
                     {cat.id !== 'cat-general' && (
                       <button
                         onClick={() => setCatToDelete(cat)}
                         className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
-                        title="Eliminar categoría"
+                        title="Eliminar categoría completa"
                       >
-                        <Trash2 className="w-4 h-4" />
+                        <Trash2 className="w-4 h-4 text-rose-500" />
                       </button>
                     )}
                   </div>
@@ -177,6 +191,31 @@ export const CategoriesView: React.FC<CategoriesViewProps> = ({
         onClose={() => setEditingCat(null)}
         category={editingCat}
         onSave={onUpdateCategory}
+      />
+
+      {/* Empty Category Confirmation Modal */}
+      <ConfirmModal
+        isOpen={Boolean(catToEmpty)}
+        title="Vaciar Lista de Correos"
+        message={`¿Estás seguro de eliminar todos los ${catToEmpty?.total_correos || 0} correos de la lista "${catToEmpty?.nombre}"? La categoría se mantendrá creada pero sin ningún contacto.`}
+        confirmLabel={`Vaciar ${catToEmpty?.total_correos || 0} correos`}
+        isDestructive={true}
+        isLoading={isEmptyingCat}
+        onConfirm={async () => {
+          if (!catToEmpty || !onEmptyCategory) return;
+          setIsEmptyingCat(true);
+          try {
+            await onEmptyCategory(catToEmpty.id);
+            setCatToEmpty(null);
+          } catch (err) {
+            setErrorMsg((err as Error).message || 'Error al vaciar categoría.');
+          } finally {
+            setIsEmptyingCat(false);
+          }
+        }}
+        onCancel={() => {
+          if (!isEmptyingCat) setCatToEmpty(null);
+        }}
       />
 
       {/* Delete Category Confirmation Modal */}

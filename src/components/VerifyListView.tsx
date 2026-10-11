@@ -21,8 +21,22 @@ import {
   Sparkles,
   TrendingUp,
   Zap,
+  RefreshCw,
+  FileText,
+  Check,
+  ShieldCheck,
+  X,
+  ChevronDown,
+  CheckCheck,
 } from 'lucide-react';
-import { Categoria, Correo, EstadoEmail, TipoEmail, UploadProcessSummary } from '../server/db/schema.ts';
+import {
+  Categoria,
+  Correo,
+  EstadoEmail,
+  TipoEmail,
+  UploadProcessSummary,
+  SystemConfig,
+} from '../server/db/schema.ts';
 import { InteractiveAnalyticsHub } from './InteractiveAnalyticsHub.tsx';
 import { EditEmailModal } from './EditEmailModal.tsx';
 import { EditCategoryModal } from './EditCategoryModal.tsx';
@@ -49,14 +63,20 @@ interface VerifyListViewProps {
   onTypeFilterChange: (value: TipoEmail | 'TODOS') => void;
   onScoreFilterChange: (value: string) => void;
   onPageChange: (newPage: number) => void;
+  onLimitChange?: (newLimit: number) => void;
   onDeleteEmail: (id: string) => Promise<void>;
   onBulkDelete: (ids: string[]) => Promise<void>;
   onBulkMove: (ids: string[], targetCategoryId: string) => Promise<void>;
   onPurgeInvalid: () => Promise<void>;
+  onEmptyCategory?: (categoryId: string) => Promise<void>;
+  onDeleteByFilter?: (categoryId: string, filter: 'INVALIDOS' | 'GENERICOS_ROL' | 'VALIDOS' | 'ALL' | 'FILTERED', options?: any) => Promise<void>;
   onMoveRolesToNewList: () => Promise<void>;
   onEditEmail: (id: string, data: { email: string; estado: EstadoEmail; observacion: string; reVerify: boolean }) => Promise<void>;
   onUploadSuccess: (summary: UploadProcessSummary, targetCatId?: string) => void;
   loading: boolean;
+  systemConfig?: SystemConfig | null;
+  onPlanUpgraded?: (newConfig: SystemConfig) => void;
+  onReauditSuccess?: () => void;
 }
 
 export const VerifyListView: React.FC<VerifyListViewProps> = ({
@@ -79,14 +99,20 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
   onTypeFilterChange,
   onScoreFilterChange,
   onPageChange,
+  onLimitChange,
   onDeleteEmail,
   onBulkDelete,
   onBulkMove,
   onPurgeInvalid,
+  onEmptyCategory,
+  onDeleteByFilter,
   onMoveRolesToNewList,
   onEditEmail,
   onUploadSuccess,
   loading,
+  systemConfig,
+  onPlanUpgraded,
+  onReauditSuccess,
 }) => {
   const [checkDns, setCheckDns] = useState(true);
   const [autoCorrect, setAutoCorrect] = useState(true);
@@ -103,8 +129,15 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
   const [isUpgradeModalOpen, setIsUpgradeModalOpen] = useState(false);
   const [upgradeModalMessage, setUpgradeModalMessage] = useState('');
 
-  // Bulk selection state
+  // Estados de exportación avanzada y re-auditoría
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [exportLoadingType, setExportLoadingType] = useState<string | null>(null);
+  const [isReauditing, setIsReauditing] = useState(false);
+
+  // Bulk selection state (con selección total entre todas las páginas)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isSelectAllAcrossPages, setIsSelectAllAcrossPages] = useState(false);
+  const [isSelectionDropdownOpen, setIsSelectionDropdownOpen] = useState(false);
   const [targetMoveCatId, setTargetMoveCatId] = useState('');
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [isPurging, setIsPurging] = useState(false);
@@ -165,6 +198,18 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
     const targetCatId = effectiveCatId;
     if (!targetCatId) {
       setErrorMessage('Por favor crea o selecciona una lista de destino antes de subir archivos.');
+      return;
+    }
+
+    // 1. Verificación previa de límite de créditos de la cuenta
+    const availableCredits = systemConfig?.creditosDisponibles ?? 0;
+    const isUnlimited = systemConfig?.planType === 'unlimited';
+    if (!isUnlimited && availableCredits <= 0) {
+      const msg = `Límite de depuración alcanzado. Tu cuenta dispone de 0 créditos en el ${systemConfig?.planName || 'plan actual'}. Para continuar depurando listas, por favor actualiza tu plan.`;
+      setUpgradeModalMessage(msg);
+      setIsUpgradeModalOpen(true);
+      setErrorMessage(msg);
+      if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
 
@@ -230,13 +275,53 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
     }
   };
 
-  // Exportar lista limpia a CSV
-  const handleExportCsv = async () => {
+  // Descarga nativa de Microsoft Excel (.xlsx) estructurada por hojas o filtros
+  const handleDownloadXlsx = async (scope: 'separated' | 'validos' | 'roles' | 'invalidos' | 'all' = 'separated') => {
     const targetCatId = effectiveCatId;
     if (!targetCatId) return;
-    setIsExporting(true);
+    setExportLoadingType(`xlsx-${scope}`);
     try {
-      const url = `/api/emails/export/${targetCatId}?include_roles=${includeRolesInExport}`;
+      const url = `/api/emails/export-xlsx/${targetCatId}?scope=${scope}`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error('Error al generar la descarga del archivo Excel.');
+      }
+
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      const safeName = (activeCategory?.nombre || 'List').replace(/[^a-zA-Z0-9_-]/g, '_');
+      const suffix =
+        scope === 'separated'
+          ? 'Hojas_Separadas_SinMezcla'
+          : scope === 'validos'
+          ? 'Solo_Validos'
+          : scope === 'roles'
+          ? 'Solo_Roles'
+          : scope === 'invalidos'
+          ? 'Solo_Invalidos'
+          : 'Todos';
+      a.download = `CleanMail_${safeName}_${suffix}_${Date.now()}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(downloadUrl);
+      document.body.removeChild(a);
+      setIsExportModalOpen(false);
+    } catch (err) {
+      setErrorMessage((err as Error).message || 'No se pudo exportar a Excel.');
+    } finally {
+      setExportLoadingType(null);
+    }
+  };
+
+  // Descarga limpia a CSV con delimitador estricto sin mezcla
+  const handleDownloadCsv = async (scope: 'validos' | 'roles' | 'invalidos' | 'validos_y_roles' | 'all' = 'validos', delimiter = ';') => {
+    const targetCatId = effectiveCatId;
+    if (!targetCatId) return;
+    setExportLoadingType(`csv-${scope}`);
+    try {
+      const url = `/api/emails/export/${targetCatId}?scope=${scope}&delimiter=${delimiter}`;
       const response = await fetch(url);
       if (!response.ok) {
         throw new Error('Error al generar la descarga del archivo CSV.');
@@ -247,28 +332,120 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
       const a = document.createElement('a');
       a.href = downloadUrl;
       const safeName = (activeCategory?.nombre || 'List').replace(/[^a-zA-Z0-9_-]/g, '_');
-      a.download = `CleanMail_${safeName}_${Date.now()}.csv`;
+      a.download = `CleanMail_${safeName}_${scope}_${Date.now()}.csv`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(downloadUrl);
       document.body.removeChild(a);
+      setIsExportModalOpen(false);
     } catch (err) {
       setErrorMessage((err as Error).message || 'No se pudo exportar el CSV.');
     } finally {
-      setIsExporting(false);
+      setExportLoadingType(null);
     }
+  };
+
+  // Descarga en Texto Plano (.txt) - un correo por línea
+  const handleDownloadTxt = async (scope: 'validos' | 'roles' | 'all' = 'validos') => {
+    const targetCatId = effectiveCatId;
+    if (!targetCatId) return;
+    setExportLoadingType(`txt-${scope}`);
+    try {
+      const url = `/api/emails/export-txt/${targetCatId}?scope=${scope}`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error('Error al generar la descarga en texto plano.');
+      }
+
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      const safeName = (activeCategory?.nombre || 'List').replace(/[^a-zA-Z0-9_-]/g, '_');
+      a.download = `CleanMail_${safeName}_${scope}_${Date.now()}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(downloadUrl);
+      document.body.removeChild(a);
+      setIsExportModalOpen(false);
+    } catch (err) {
+      setErrorMessage((err as Error).message || 'No se pudo exportar el TXT.');
+    } finally {
+      setExportLoadingType(null);
+    }
+  };
+
+  // Re-Auditar lista completa con las reglas anti-fraude y de proveedor actualizadas
+  const handleReauditList = () => {
+    if (!effectiveCatId) return;
+    setConfirmModal({
+      isOpen: true,
+      title: 'Re-Auditar Lista Completa',
+      message: `¿Deseas volver a auditar y clasificar los ${total} correos de "${activeCategory?.nombre}" con las reglas actualizadas? Se recalculará el estado exacto de cada contacto (Válidos, Rol, Inválidos) para corregir clasificaciones.`,
+      confirmLabel: 'Re-Auditar Ahora',
+      isDestructive: false,
+      onConfirm: async () => {
+        setIsConfirmLoading(true);
+        setIsReauditing(true);
+        try {
+          const res = await fetch(`/api/emails/reaudit-category/${effectiveCatId}`, { method: 'POST' });
+          const data = await res.json();
+          if (!res.ok || !data.success) {
+            throw new Error(data.message || 'Error al re-auditar la categoría.');
+          }
+          if (onReauditSuccess) onReauditSuccess();
+          setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        } catch (err) {
+          setErrorMessage((err as Error).message || 'Error durante la re-auditoría.');
+        } finally {
+          setIsConfirmLoading(false);
+          setIsReauditing(false);
+        }
+      },
+    });
   };
 
   // Bulk Selection Handlers
   const toggleSelectAll = () => {
-    if (selectedIds.size === correos.length && correos.length > 0) {
+    if (isSelectAllAcrossPages) {
+      setIsSelectAllAcrossPages(false);
+      setSelectedIds(new Set());
+    } else if (selectedIds.size === correos.length && correos.length > 0) {
       setSelectedIds(new Set());
     } else {
       setSelectedIds(new Set(correos.map((c) => c.id)));
     }
   };
 
+  const handleSelectEntireList = () => {
+    setIsSelectAllAcrossPages(true);
+    setSelectedIds(new Set(correos.map((c) => c.id)));
+    setIsSelectionDropdownOpen(false);
+  };
+
+  const handleSelectCurrentPage = () => {
+    setIsSelectAllAcrossPages(false);
+    setSelectedIds(new Set(correos.map((c) => c.id)));
+    setIsSelectionDropdownOpen(false);
+  };
+
+  const handleSelectOnlyStatus = (status: EstadoEmail) => {
+    setIsSelectAllAcrossPages(false);
+    const matching = correos.filter((c) => c.estado === status).map((c) => c.id);
+    setSelectedIds(new Set(matching));
+    setIsSelectionDropdownOpen(false);
+  };
+
+  const handleClearSelection = () => {
+    setIsSelectAllAcrossPages(false);
+    setSelectedIds(new Set());
+    setIsSelectionDropdownOpen(false);
+  };
+
   const toggleSelectOne = (id: string) => {
+    if (isSelectAllAcrossPages) {
+      setIsSelectAllAcrossPages(false);
+    }
     const next = new Set(selectedIds);
     if (next.has(id)) {
       next.delete(id);
@@ -279,23 +456,80 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
   };
 
   const handleBulkDelete = () => {
-    if (selectedIds.size === 0) return;
-    const count = selectedIds.size;
+    if (selectedIds.size === 0 && !isSelectAllAcrossPages) return;
+    const count = isSelectAllAcrossPages ? total : selectedIds.size;
+    const isFullList = isSelectAllAcrossPages;
+
     setConfirmModal({
       isOpen: true,
-      title: 'Eliminar correos seleccionados',
-      message: `¿Estás seguro de eliminar los ${count} correos seleccionados de "${activeCategory?.nombre}"? Esta acción no se puede deshacer.`,
+      title: isFullList ? 'Eliminar toda la lista' : 'Eliminar correos seleccionados',
+      message: isFullList
+        ? `¿Estás seguro de eliminar los ${total} correos de "${activeCategory?.nombre}" (todas las páginas de la lista)? Esta acción no se puede deshacer.`
+        : `¿Estás seguro de eliminar los ${count} correos seleccionados de "${activeCategory?.nombre}"? Esta acción no se puede deshacer.`,
       confirmLabel: `Eliminar ${count} correos`,
       isDestructive: true,
       onConfirm: async () => {
         setIsConfirmLoading(true);
         setIsBulkDeleting(true);
         try {
-          await onBulkDelete(Array.from(selectedIds));
+          if (isFullList) {
+            const hasActiveFilter = Boolean(
+              searchTerm.trim() || statusFilter !== 'TODOS' || typeFilter !== 'TODOS' || scoreFilter !== 'ALL'
+            );
+            if (hasActiveFilter && onDeleteByFilter && effectiveCatId) {
+              await onDeleteByFilter(effectiveCatId, 'FILTERED', {
+                search: searchTerm,
+                estado: statusFilter,
+                tipo: typeFilter,
+                min_score: scoreFilter === 'HIGH_80' ? 80 : scoreFilter === 'MID_50' ? 50 : undefined,
+                max_score: scoreFilter === 'LOW_50' ? 49 : scoreFilter === 'MID_50' ? 79 : undefined,
+              });
+            } else if (onEmptyCategory && effectiveCatId) {
+              await onEmptyCategory(effectiveCatId);
+            } else if (onDeleteByFilter && effectiveCatId) {
+              await onDeleteByFilter(effectiveCatId, 'ALL');
+            } else {
+              await onBulkDelete(Array.from(selectedIds));
+            }
+          } else {
+            await onBulkDelete(Array.from(selectedIds));
+          }
           setSelectedIds(new Set());
+          setIsSelectAllAcrossPages(false);
           setConfirmModal((prev) => ({ ...prev, isOpen: false }));
         } catch (err) {
           setErrorMessage((err as Error).message || 'Error al eliminar correos.');
+        } finally {
+          setIsBulkDeleting(false);
+          setIsConfirmLoading(false);
+        }
+      },
+    });
+  };
+
+  // Vaciar categoría completa en un solo clic
+  const handleEmptyCategoryDirect = () => {
+    if (!effectiveCatId || total === 0) return;
+    setConfirmModal({
+      isOpen: true,
+      title: `Vaciar Lista "${activeCategory?.nombre}"`,
+      message: `¿Estás seguro de eliminar todos los ${total} correos de esta lista? La lista quedará vacía en 1 solo clic sin tener que eliminarlos de 50 en 50.`,
+      confirmLabel: `Vaciar los ${total} correos`,
+      isDestructive: true,
+      onConfirm: async () => {
+        setIsConfirmLoading(true);
+        setIsBulkDeleting(true);
+        try {
+          if (onEmptyCategory) {
+            await onEmptyCategory(effectiveCatId);
+          } else if (onDeleteByFilter) {
+            await onDeleteByFilter(effectiveCatId, 'ALL');
+          }
+          setSelectedIds(new Set());
+          setIsSelectAllAcrossPages(false);
+          setConfirmModal((prev) => ({ ...prev, isOpen: false }));
+        } catch (err) {
+          setErrorMessage((err as Error).message || 'Error al vaciar la lista.');
         } finally {
           setIsBulkDeleting(false);
           setIsConfirmLoading(false);
@@ -482,9 +716,55 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
         onFilterByDomain={(domain) => onSearchChange(domain)}
         onPurgeInvalid={handleExecutePurge}
         onMoveRolesToNewList={handleExecuteMoveRoles}
-        onExportDeliverableOnly={handleExportCsv}
+        onExportDeliverableOnly={() => handleDownloadXlsx('validos')}
         isPurging={isPurging}
       />
+
+      {/* Monitor de Cupo y Límite de Depuración de la Cuenta */}
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 rounded-2xl p-5 text-white border border-slate-700/80 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div className="space-y-1.5 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Cupo de Depuración</span>
+            <span className="px-2.5 py-0.5 rounded-full bg-[#00a2c7]/20 text-[#00a2c7] border border-[#00a2c7]/30 text-[11px] font-extrabold">
+              {systemConfig?.planName || 'Plan Activo'}
+            </span>
+            {systemConfig?.planType === 'unlimited' ? (
+              <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold">
+                Ilimitado
+              </span>
+            ) : null}
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-2xl font-black font-mono tracking-tight text-white">
+              {(systemConfig?.creditosDisponibles ?? 0).toLocaleString()}
+            </span>
+            <span className="text-xs text-slate-400">créditos de depuración disponibles en tu cuenta</span>
+          </div>
+          {(!systemConfig || systemConfig.planType !== 'unlimited') && (systemConfig?.creditosDisponibles ?? 0) <= 0 ? (
+            <p className="text-xs text-rose-400 font-semibold flex items-center gap-1.5 pt-0.5">
+              <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+              Límite alcanzado (0 créditos). La subida de nuevos archivos está pausada hasta actualizar tu plan.
+            </p>
+          ) : (
+            <p className="text-[11px] text-slate-400">
+              Cada correo cargado descuenta 1 crédito de depuración. Límite estrictamente aplicado para proteger tu reputación.
+            </p>
+          )}
+        </div>
+
+        <button
+          onClick={() => {
+            setUpgradeModalMessage(
+              `Tu cuenta dispone de ${(systemConfig?.creditosDisponibles ?? 0).toLocaleString()} créditos. Elige un plan para aumentar tu límite de depuración.`
+            );
+            setIsUpgradeModalOpen(true);
+          }}
+          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-[#00a2c7] to-[#0082a0] hover:from-[#0092b3] hover:to-[#00728c] text-white text-xs font-bold transition shadow-sm cursor-pointer shrink-0"
+        >
+          <Zap className="w-3.5 h-3.5 text-amber-300" />
+          <span>Actualizar Plan / Más Créditos</span>
+        </button>
+      </div>
 
       {/* Upload Zone */}
       <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-4">
@@ -704,41 +984,70 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
             </select>
           </div>
 
-          {/* Export Button */}
-          <div className="flex items-center gap-2 shrink-0">
-            <label className="flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={includeRolesInExport}
-                onChange={(e) => setIncludeRolesInExport(e.target.checked)}
-                className="w-3.5 h-3.5 rounded text-[#00a2c7] focus:ring-[#00a2c7]"
-              />
-              <span className="text-[11px]">Incluir Roles</span>
-            </label>
-
+          {/* Export & Actions Group */}
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {/* Re-Auditar Lista Completa */}
             <button
-              onClick={handleExportCsv}
-              disabled={isExporting || total === 0}
-              className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-bold transition shadow-xs cursor-pointer"
+              onClick={handleReauditList}
+              disabled={isReauditing || total === 0}
+              title="Re-analizar toda la lista con las reglas actualizadas para corregir clasificaciones"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 disabled:opacity-40 text-xs font-bold transition cursor-pointer"
             >
-              <Download className="w-3.5 h-3.5" />
-              <span>{isExporting ? 'Exportando...' : 'Exportar CSV Limpio'}</span>
+              <RefreshCw className={`w-3.5 h-3.5 ${isReauditing ? 'animate-spin text-[#00a2c7]' : ''}`} />
+              <span className="hidden sm:inline">{isReauditing ? 'Re-Auditando...' : 'Re-Auditar'}</span>
             </button>
+
+            {/* Descarga Rápida Excel Multi-Hoja (Recomendada - Cero Mezclas) */}
+            <button
+              onClick={() => handleDownloadXlsx('separated')}
+              disabled={exportLoadingType !== null || total === 0}
+              className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-xs font-bold transition shadow-xs cursor-pointer"
+              title="Descarga un libro de Excel con hojas separadas para Válidos, Rol e Inválidos (¡Cero mezclas!)"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5" />
+              <span>{exportLoadingType === 'xlsx-separated' ? 'Descargando...' : 'Descargar Excel (.xlsx)'}</span>
+            </button>
+
+            {/* Abrir Modal de Opciones de Descarga */}
+            <button
+              onClick={() => setIsExportModalOpen(true)}
+              disabled={total === 0}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-300 hover:border-[#00a2c7] hover:bg-[#f0f9fb] text-slate-700 text-xs font-bold transition cursor-pointer"
+              title="Ver todas las opciones de exportación (CSV, TXT, solo válidos, etc.)"
+            >
+              <Download className="w-3.5 h-3.5 text-[#00a2c7]" />
+              <span className="hidden sm:inline">Más Formatos</span>
+            </button>
+
+            {/* Vaciar lista completa en 1 clic */}
+            {total > 0 && (
+              <button
+                onClick={handleEmptyCategoryDirect}
+                disabled={isBulkDeleting}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold transition cursor-pointer"
+                title={`Eliminar todos los ${total} correos de esta lista de una sola vez`}
+              >
+                <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                <span className="hidden sm:inline">Vaciar Lista ({total})</span>
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Bulk Action Bar (Visible when items are selected) */}
-        {selectedIds.size > 0 && (
+        {/* Bulk Action Bar (Visible when items are selected or all pages selected) */}
+        {(selectedIds.size > 0 || isSelectAllAcrossPages) && (
           <div className="px-4 py-2.5 bg-slate-900 text-white flex flex-wrap items-center justify-between gap-3 text-xs animate-fade-in">
             <div className="flex items-center gap-2">
               <CheckSquare className="w-4 h-4 text-[#00a2c7]" />
               <span className="font-bold">
-                {selectedIds.size} correo{selectedIds.size > 1 ? 's' : ''} seleccionado{selectedIds.size > 1 ? 's' : ''}
+                {isSelectAllAcrossPages
+                  ? `Todos los ${total} correos seleccionados (Lista completa)`
+                  : `${selectedIds.size} correo${selectedIds.size > 1 ? 's' : ''} seleccionado${selectedIds.size > 1 ? 's' : ''}`}
               </span>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              {otherCategories.length > 0 && (
+              {otherCategories.length > 0 && !isSelectAllAcrossPages && (
                 <div className="flex items-center gap-1.5">
                   <select
                     value={targetMoveCatId}
@@ -765,19 +1074,60 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
               <button
                 onClick={handleBulkDelete}
                 disabled={isBulkDeleting}
-                className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+                className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>{isBulkDeleting ? 'Eliminando...' : 'Eliminar Seleccionados'}</span>
+                <span>
+                  {isBulkDeleting
+                    ? 'Eliminando...'
+                    : isSelectAllAcrossPages
+                    ? `Eliminar los ${total} correos de la lista`
+                    : `Eliminar ${selectedIds.size} correos`}
+                </span>
               </button>
 
               <button
-                onClick={() => setSelectedIds(new Set())}
+                onClick={handleClearSelection}
                 className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer"
               >
                 Deseleccionar
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Banner de Selección Cruzada entre Páginas */}
+        {selectedIds.size === correos.length && total > correos.length && !isSelectAllAcrossPages && (
+          <div className="px-4 py-2 bg-sky-50 border-b border-sky-200 text-xs text-sky-900 flex flex-wrap items-center justify-between gap-2 animate-fade-in">
+            <div className="flex items-center gap-2">
+              <span>
+                Se han seleccionado los <strong>{correos.length}</strong> correos de esta página.
+              </span>
+            </div>
+            <button
+              onClick={handleSelectEntireList}
+              className="px-3 py-1 bg-white border border-sky-300 hover:border-[#00a2c7] text-[#00a2c7] hover:text-[#0082a0] font-extrabold rounded-lg transition shadow-2xs cursor-pointer flex items-center gap-1.5"
+            >
+              <CheckCheck className="w-3.5 h-3.5" />
+              <span>Seleccionar todos los {total} correos de "{activeCategory?.nombre}" (todas las páginas)</span>
+            </button>
+          </div>
+        )}
+
+        {isSelectAllAcrossPages && (
+          <div className="px-4 py-2 bg-emerald-50 border-b border-emerald-200 text-xs text-emerald-900 flex flex-wrap items-center justify-between gap-2 animate-fade-in">
+            <div className="flex items-center gap-2 font-medium">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>
+                ¡Están seleccionados <strong>todos los {total} correos</strong> de la lista "{activeCategory?.nombre}" (todas las páginas)!
+              </span>
+            </div>
+            <button
+              onClick={handleClearSelection}
+              className="text-xs text-slate-600 hover:text-slate-900 underline font-bold cursor-pointer"
+            >
+              Cancelar selección
+            </button>
           </div>
         )}
 
@@ -791,14 +1141,81 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
           <table className="w-full text-left text-xs">
             <thead className="bg-[#f8fafc] text-slate-500 font-bold uppercase tracking-wider text-[10px] border-b border-slate-200 sticky top-0 z-10">
               <tr>
-                <th className="px-4 py-3 w-10 text-center">
-                  <input
-                    type="checkbox"
-                    checked={correos.length > 0 && selectedIds.size === correos.length}
-                    onChange={toggleSelectAll}
-                    className="w-3.5 h-3.5 rounded text-[#00a2c7] focus:ring-[#00a2c7] cursor-pointer"
-                    title="Seleccionar todos los correos visibles"
-                  />
+                <th className="px-4 py-3 w-16 text-center">
+                  <div className="relative inline-flex items-center gap-1">
+                    <input
+                      type="checkbox"
+                      checked={
+                        isSelectAllAcrossPages ||
+                        (correos.length > 0 && selectedIds.size === correos.length)
+                      }
+                      onChange={toggleSelectAll}
+                      className="w-3.5 h-3.5 rounded text-[#00a2c7] focus:ring-[#00a2c7] cursor-pointer"
+                      title="Seleccionar correos visibles"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setIsSelectionDropdownOpen(!isSelectionDropdownOpen)}
+                      className="p-0.5 text-slate-400 hover:text-slate-700 rounded transition cursor-pointer"
+                      title="Opciones de selección masiva"
+                    >
+                      <ChevronDown className="w-3 h-3" />
+                    </button>
+
+                    {isSelectionDropdownOpen && (
+                      <div className="absolute left-0 top-full mt-1 w-52 bg-white rounded-xl shadow-xl border border-slate-200 py-1.5 z-30 text-left text-xs normal-case animate-scale-up font-normal text-slate-700">
+                        <button
+                          type="button"
+                          onClick={handleSelectCurrentPage}
+                          className="w-full px-3 py-1.5 hover:bg-slate-50 flex items-center justify-between cursor-pointer"
+                        >
+                          <span>Página actual</span>
+                          <span className="font-mono text-[10px] text-slate-400">({correos.length})</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleSelectEntireList}
+                          className="w-full px-3 py-1.5 hover:bg-slate-50 text-[#00a2c7] font-bold flex items-center justify-between cursor-pointer"
+                        >
+                          <span>Toda la lista</span>
+                          <span className="font-mono text-[10px]">({total})</span>
+                        </button>
+                        <div className="my-1 border-t border-slate-100"></div>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectOnlyStatus('INVALIDO')}
+                          className="w-full px-3 py-1.5 hover:bg-slate-50 text-rose-600 flex items-center justify-between cursor-pointer"
+                        >
+                          <span>Solo Inválidos</span>
+                          <span className="font-mono text-[10px]">({activeCategory?.invalidos || 0})</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectOnlyStatus('GENERICO_ROL')}
+                          className="w-full px-3 py-1.5 hover:bg-slate-50 text-amber-600 flex items-center justify-between cursor-pointer"
+                        >
+                          <span>Solo Cuentas de Rol</span>
+                          <span className="font-mono text-[10px]">({activeCategory?.genericos_rol || 0})</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectOnlyStatus('VALIDO')}
+                          className="w-full px-3 py-1.5 hover:bg-slate-50 text-emerald-600 flex items-center justify-between cursor-pointer"
+                        >
+                          <span>Solo Válidos</span>
+                          <span className="font-mono text-[10px]">({activeCategory?.validos || 0})</span>
+                        </button>
+                        <div className="my-1 border-t border-slate-100"></div>
+                        <button
+                          type="button"
+                          onClick={handleClearSelection}
+                          className="w-full px-3 py-1.5 hover:bg-slate-50 text-slate-500 cursor-pointer"
+                        >
+                          Deseleccionar todo
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </th>
                 <th className="px-4 py-3">Correo Electrónico</th>
                 <th className="px-4 py-3">Status</th>
@@ -947,10 +1364,31 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
         </div>
 
         {/* Pagination footer */}
-        <div className="p-3 border-t border-slate-200 bg-slate-50/50 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-500">
-          <div>
-            Mostrando {total === 0 ? 0 : (page - 1) * limit + 1} - {Math.min(page * limit, total)} de{' '}
-            <strong className="text-slate-800">{total}</strong> correos
+        <div className="p-3 border-t border-slate-200 bg-slate-50/50 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span>
+              Mostrando {total === 0 ? 0 : (page - 1) * limit + 1} - {Math.min(page * limit, total)} de{' '}
+              <strong className="text-slate-800">{total}</strong> correos
+            </span>
+
+            {/* Selector de registros por página */}
+            {onLimitChange && (
+              <div className="flex items-center gap-1.5 pl-2 border-l border-slate-300">
+                <span className="text-[11px] text-slate-500 font-medium">Mostrar:</span>
+                <select
+                  value={limit}
+                  onChange={(e) => onLimitChange(Number(e.target.value))}
+                  className="bg-white border border-slate-300 text-slate-800 font-bold text-xs rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-[#00a2c7] cursor-pointer shadow-2xs"
+                  title="Cantidad de correos a mostrar por página"
+                >
+                  <option value={50}>50 por página</option>
+                  <option value={100}>100 por página</option>
+                  <option value={250}>250 por página</option>
+                  <option value={500}>500 por página</option>
+                  <option value={1000}>1,000 por página</option>
+                </select>
+              </div>
+            )}
           </div>
 
           {totalPages > 1 && (
@@ -1013,12 +1451,202 @@ export const VerifyListView: React.FC<VerifyListViewProps> = ({
       <UpgradePlanModal
         isOpen={isUpgradeModalOpen}
         onClose={() => setIsUpgradeModalOpen(false)}
-        currentConfig={null}
-        onPlanUpgraded={() => {
+        currentConfig={systemConfig || null}
+        onPlanUpgraded={(newConfig) => {
           setErrorMessage('');
+          if (onPlanUpgraded) onPlanUpgraded(newConfig);
         }}
         message={upgradeModalMessage}
       />
+
+      {/* Modal Avanzado de Descarga y Exportación Sin Mezclas */}
+      {isExportModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden animate-scale-up">
+            {/* Header */}
+            <div className="p-6 pb-4 border-b border-slate-100 flex items-start justify-between bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white">
+              <div className="space-y-1">
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[11px] font-extrabold uppercase">
+                  <CheckCircle2 className="w-3 h-3" /> Exportación Segura & Sin Mezclas
+                </div>
+                <h3 className="text-lg font-extrabold text-white">Descargar Correos Depurados</h3>
+                <p className="text-xs text-slate-400">
+                  Lista: <strong className="text-white">{activeCategory?.nombre}</strong> ({total} correos totales)
+                </p>
+              </div>
+              <button
+                onClick={() => setIsExportModalOpen(false)}
+                className="p-1 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Metrics Pills */}
+            <div className="px-6 py-3 bg-slate-50 border-b border-slate-200/80 flex flex-wrap items-center gap-2 text-xs">
+              <span className="font-semibold text-slate-600">Disponibles para descargar:</span>
+              <span className="px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-bold text-[11px]">
+                {activeCategory?.validos || 0} Válidos
+              </span>
+              <span className="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold text-[11px]">
+                {activeCategory?.genericos_rol || 0} De Rol
+              </span>
+              <span className="px-2.5 py-0.5 rounded-full bg-rose-100 text-rose-800 font-bold text-[11px]">
+                {activeCategory?.invalidos || 0} Inválidos
+              </span>
+            </div>
+
+            {/* Content Body */}
+            <div className="p-6 overflow-y-auto space-y-4">
+              {/* Option 1: Multi-Sheet Excel (Recommended) */}
+              <div className="p-4 rounded-2xl border-2 border-emerald-500 bg-emerald-50/30 hover:bg-emerald-50/60 transition flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-extrabold text-sm text-slate-900">
+                      Excel (.xlsx) Multi-Hoja
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[10px] font-black uppercase">
+                      Recomendado • Cero Mezcla
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600">
+                    Crea un archivo con <strong>pestañas independientes</strong>: Hoja 1 para Válidos, Hoja 2 para De Rol, y Hoja 3 para Inválidos. Cada dato en su columna con formato perfecto.
+                  </p>
+                </div>
+                <button
+                  onClick={() => handleDownloadXlsx('separated')}
+                  disabled={exportLoadingType !== null}
+                  className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold transition shadow-xs flex items-center gap-2 cursor-pointer shrink-0"
+                >
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span>{exportLoadingType === 'xlsx-separated' ? 'Generando...' : 'Descargar Libro Completo'}</span>
+                </button>
+              </div>
+
+              {/* Grid with specialized downloads */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                {/* Solo Válidos */}
+                <div className="p-3.5 rounded-xl border border-slate-200 bg-white hover:border-[#00a2c7] hover:bg-[#f0f9fb]/40 transition space-y-2">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      Excel: Solo Correos Válidos
+                    </h4>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Únicamente los {activeCategory?.validos || 0} contactos 100% limpios y entregables.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleDownloadXlsx('validos')}
+                    disabled={exportLoadingType !== null || (activeCategory?.validos || 0) === 0}
+                    className="w-full py-1.5 rounded-lg bg-white border border-slate-300 hover:border-emerald-500 hover:text-emerald-700 disabled:opacity-40 text-slate-700 text-xs font-bold transition cursor-pointer"
+                  >
+                    {exportLoadingType === 'xlsx-validos' ? 'Descargando...' : 'Descargar Solo Válidos (.xlsx)'}
+                  </button>
+                </div>
+
+                {/* Solo Cuentas de Rol */}
+                <div className="p-3.5 rounded-xl border border-slate-200 bg-white hover:border-amber-400 hover:bg-amber-50/30 transition space-y-2">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                      <Layers className="w-3.5 h-3.5 text-amber-600" />
+                      Excel: Solo Cuentas de Rol
+                    </h4>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Los {activeCategory?.genericos_rol || 0} contactos departamentales (info@, ventas@).
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleDownloadXlsx('roles')}
+                    disabled={exportLoadingType !== null || (activeCategory?.genericos_rol || 0) === 0}
+                    className="w-full py-1.5 rounded-lg bg-white border border-slate-300 hover:border-amber-500 hover:text-amber-700 disabled:opacity-40 text-slate-700 text-xs font-bold transition cursor-pointer"
+                  >
+                    {exportLoadingType === 'xlsx-roles' ? 'Descargando...' : 'Descargar Solo Roles (.xlsx)'}
+                  </button>
+                </div>
+
+                {/* Solo Inválidos */}
+                <div className="p-3.5 rounded-xl border border-slate-200 bg-white hover:border-rose-400 hover:bg-rose-50/30 transition space-y-2">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-600" />
+                      Excel: Solo Inválidos
+                    </h4>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Los {activeCategory?.invalidos || 0} correos no entregables con su diagnóstico de rechazo.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleDownloadXlsx('invalidos')}
+                    disabled={exportLoadingType !== null || (activeCategory?.invalidos || 0) === 0}
+                    className="w-full py-1.5 rounded-lg bg-white border border-slate-300 hover:border-rose-500 hover:text-rose-700 disabled:opacity-40 text-slate-700 text-xs font-bold transition cursor-pointer"
+                  >
+                    {exportLoadingType === 'xlsx-invalidos' ? 'Descargando...' : 'Descargar Inválidos (.xlsx)'}
+                  </button>
+                </div>
+
+                {/* Texto Plano TXT */}
+                <div className="p-3.5 rounded-xl border border-slate-200 bg-white hover:border-slate-400 transition space-y-2">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5 text-slate-600" />
+                      Lista en Texto Plano (.txt)
+                    </h4>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Un correo por línea, sin cabeceras. Ideal para copiar y pegar directo.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => handleDownloadTxt('validos')}
+                    disabled={exportLoadingType !== null || (activeCategory?.validos || 0) === 0}
+                    className="w-full py-1.5 rounded-lg bg-white border border-slate-300 hover:border-slate-500 text-slate-700 disabled:opacity-40 text-xs font-bold transition cursor-pointer"
+                  >
+                    {exportLoadingType === 'txt-validos' ? 'Descargando...' : 'Descargar TXT Válidos (.txt)'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Formato CSV */}
+              <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/60 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-900">Formato CSV Limpio</h4>
+                    <p className="text-[11px] text-slate-500">
+                      Incluye cabecera sep=; y codificación UTF-8 con BOM para apertura correcta.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleDownloadCsv('validos', ';')}
+                      disabled={exportLoadingType !== null || (activeCategory?.validos || 0) === 0}
+                      className="px-3 py-1.5 rounded-lg bg-white border border-slate-300 hover:border-[#00a2c7] text-slate-700 text-xs font-bold transition cursor-pointer"
+                    >
+                      CSV Solo Válidos
+                    </button>
+                    <button
+                      onClick={() => handleDownloadCsv('all', ';')}
+                      disabled={exportLoadingType !== null}
+                      className="px-3 py-1.5 rounded-lg bg-white border border-slate-300 hover:border-[#00a2c7] text-slate-700 text-xs font-bold transition cursor-pointer"
+                    >
+                      CSV Completo
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-end">
+              <button
+                onClick={() => setIsExportModalOpen(false)}
+                className="px-4 py-2 rounded-xl bg-slate-200 hover:bg-slate-300 text-slate-700 text-xs font-bold transition cursor-pointer"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

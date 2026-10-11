@@ -197,7 +197,16 @@ export class EmailController {
   public static async exportCleanCsv(req: Request, res: Response) {
     try {
       const categoria_id = req.params.id;
+      const rawScope = req.query.scope as string;
       const includeRoles = req.query.include_roles === 'true';
+      const delimiter = req.query.delimiter === ',' ? ',' : ';';
+
+      let scope: 'validos' | 'roles' | 'invalidos' | 'validos_y_roles' | 'all' = 'validos';
+      if (rawScope === 'roles' || rawScope === 'invalidos' || rawScope === 'all' || rawScope === 'validos_y_roles' || rawScope === 'validos') {
+        scope = rawScope;
+      } else if (includeRoles) {
+        scope = 'validos_y_roles';
+      }
 
       const category = CategoryService.getCategoryById(categoria_id);
       if (!category) {
@@ -207,13 +216,106 @@ export class EmailController {
         });
       }
 
-      const csvData = EmailService.generateExportCsv(categoria_id, includeRoles);
+      const csvData = EmailService.generateExportCsv(categoria_id, scope, delimiter);
       const safeName = category.nombre.replace(/[^a-zA-Z0-9_-]/g, '_');
-      const filename = `Emails_Limpios_${safeName}_${Date.now()}.csv`;
+      const filename = `CleanMail_${safeName}_${scope}_${Date.now()}.csv`;
 
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       return res.send('\uFEFF' + csvData); // Con BOM UTF-8 para apertura perfecta en Excel
+    } catch (error) {
+      const err = error as Error;
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+
+  /**
+   * Endpoint: GET /api/emails/export-xlsx/:id
+   * Exporta a formato nativo Excel (.xlsx) estructurado en hojas separadas (o filtrado según scope)
+   */
+  public static async exportCleanXlsx(req: Request, res: Response) {
+    try {
+      const categoria_id = req.params.id;
+      const rawScope = (req.query.scope as string) || 'separated';
+      const scope: 'separated' | 'validos' | 'roles' | 'invalidos' | 'all' =
+        rawScope === 'validos' || rawScope === 'roles' || rawScope === 'invalidos' || rawScope === 'all'
+          ? rawScope
+          : 'separated';
+
+      const category = CategoryService.getCategoryById(categoria_id);
+      if (!category) {
+        return res.status(404).json({
+          success: false,
+          message: `Categoría no encontrada.`,
+        });
+      }
+
+      const xlsxBuffer = EmailService.generateExportXlsxBuffer(categoria_id, scope);
+      const safeName = category.nombre.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const filename = `CleanMail_${safeName}_${scope}_${Date.now()}.xlsx`;
+
+      res.setHeader(
+        'Content-Type',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      );
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.send(xlsxBuffer);
+    } catch (error) {
+      const err = error as Error;
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+
+  /**
+   * Endpoint: GET /api/emails/export-txt/:id
+   * Exporta lista de correos en texto plano (un correo por línea)
+   */
+  public static async exportCleanTxt(req: Request, res: Response) {
+    try {
+      const categoria_id = req.params.id;
+      const rawScope = req.query.scope as string;
+      const scope: 'validos' | 'roles' | 'all' =
+        rawScope === 'roles' || rawScope === 'all' ? rawScope : 'validos';
+
+      const category = CategoryService.getCategoryById(categoria_id);
+      if (!category) {
+        return res.status(404).json({
+          success: false,
+          message: `Categoría no encontrada.`,
+        });
+      }
+
+      const txtData = EmailService.generateExportTxt(categoria_id, scope);
+      const safeName = category.nombre.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const filename = `CleanMail_${safeName}_${scope}_${Date.now()}.txt`;
+
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      return res.send(txtData);
+    } catch (error) {
+      const err = error as Error;
+      return res.status(500).json({ success: false, message: err.message });
+    }
+  }
+
+  /**
+   * Endpoint: POST /api/emails/reaudit-category/:id
+   * Re-analiza toda la categoría con las nuevas reglas estrictas anti-fraude y de proveedor.
+   */
+  public static async reauditCategory(req: Request, res: Response) {
+    try {
+      const categoria_id = req.params.id;
+      const category = CategoryService.getCategoryById(categoria_id);
+      if (!category) {
+        return res.status(404).json({ success: false, message: 'Categoría no encontrada.' });
+      }
+
+      const summary = await EmailService.reauditCategory(categoria_id);
+      return res.json({
+        success: true,
+        message: `Lista "${category.nombre}" re-auditada con éxito. ${summary.validos} válidos, ${summary.roles} riesgosos/de rol, ${summary.invalidos} inválidos.`,
+        data: summary,
+      });
     } catch (error) {
       const err = error as Error;
       return res.status(500).json({ success: false, message: err.message });
@@ -336,16 +438,16 @@ export class EmailController {
   }
 
   /**
-   * Eliminación masiva por filtro (ej. purgar todos los inválidos de una categoría)
+   * Eliminación masiva por filtro (ej. purgar todos los inválidos de una categoría, vaciar lista o por filtros activos)
    */
   public static async deleteEmailsByFilter(req: Request, res: Response) {
     try {
-      const { categoria_id, filter } = req.body;
+      const { categoria_id, filter, options } = req.body;
       if (!categoria_id || !filter) {
         return res.status(400).json({ success: false, message: 'Se requiere categoria_id y tipo de filtro.' });
       }
 
-      const deletedCount = EmailService.deleteEmailsByFilter(categoria_id, filter);
+      const deletedCount = EmailService.deleteEmailsByFilter(categoria_id, filter, options);
       return res.json({
         success: true,
         message: `Depuración completada: ${deletedCount} correos eliminados.`,
